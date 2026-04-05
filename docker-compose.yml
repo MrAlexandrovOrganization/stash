@@ -1,0 +1,75 @@
+services:
+  stash:
+    build: .
+    restart: unless-stopped
+    environment:
+      ADDR: ":8080"
+      POSTGRES_URL: "postgres://stash:stash@postgres:5432/stash?sslmode=disable"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
+      WHISPER_HOST: "${WHISPER_HOST:-}"
+      WHISPER_PORT: "${WHISPER_PORT:-50053}"
+      OLLAMA_URL: "${OLLAMA_URL:-}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-llava}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - stash-net
+      - stash-api-net
+      - minio-net
+      - whisper-net
+      - ollama-net
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stash
+      POSTGRES_PASSWORD: stash
+      POSTGRES_DB: stash
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stash"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stash-net
+
+  pgadmin:
+    image: dpage/pgadmin4:9.13.0
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - stash-net
+
+networks:
+  stash-net:
+  stash-api-net:
+    name: stash-api-net
+  minio-net:
+    external: true
+    name: minio-net
+  whisper-net:
+    external: true
+    name: whisper-net
+  ollama-net:
+    external: true
+    name: ollama-net
+
+volumes:
+  postgres-data:
+  pgadmin_data:
