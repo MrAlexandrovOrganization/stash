@@ -21,11 +21,11 @@ func NewPostgres(db *pgxpool.Pool) Repository {
 
 func (r *postgres) Save(ctx context.Context, item *model.Item) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO items (id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		INSERT INTO items (id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, telegram_file_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		item.ID, string(item.Type), item.FileName, item.ContentType, item.Size,
 		item.StoragePath, item.Description, item.Tags,
-		item.Transcript, item.TranscriptJobID,
+		item.Transcript, item.TranscriptJobID, item.TelegramFileID,
 		item.CreatedAt, item.UpdatedAt,
 	)
 	return err
@@ -33,7 +33,7 @@ func (r *postgres) Save(ctx context.Context, item *model.Item) error {
 
 func (r *postgres) Get(ctx context.Context, id string) (*model.Item, error) {
 	row := r.db.QueryRow(ctx, `
-		SELECT id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, created_at, updated_at
+		SELECT id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, telegram_file_id, created_at, updated_at
 		FROM items WHERE id = $1`, id)
 	return scanItem(row)
 }
@@ -73,7 +73,7 @@ func (r *postgres) Search(ctx context.Context, q model.SearchQuery) ([]*model.It
 	}
 
 	rows, err := r.db.Query(ctx, fmt.Sprintf(`
-		SELECT id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, created_at, updated_at
+		SELECT id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, telegram_file_id, created_at, updated_at
 		FROM items %s ORDER BY created_at DESC`, where), args...)
 	if err != nil {
 		return nil, err
@@ -104,6 +104,11 @@ func (r *postgres) Update(ctx context.Context, id string, meta model.UpdateMeta)
 	if meta.Tags != nil {
 		sets = append(sets, fmt.Sprintf("tags = $%d", i))
 		args = append(args, meta.Tags)
+		i++
+	}
+	if meta.TelegramFileID != nil {
+		sets = append(sets, fmt.Sprintf("telegram_file_id = $%d", i))
+		args = append(args, *meta.TelegramFileID)
 		i++
 	}
 	if len(sets) == 0 {
@@ -146,7 +151,7 @@ func (r *postgres) UpdateTranscript(ctx context.Context, id, transcript string) 
 
 func (r *postgres) PendingTranscripts(ctx context.Context) ([]*model.Item, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, created_at, updated_at
+		SELECT id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, telegram_file_id, created_at, updated_at
 		FROM items WHERE transcript_job_id IS NOT NULL`)
 	if err != nil {
 		return nil, err
@@ -174,7 +179,7 @@ func scanItem(row scanner) (*model.Item, error) {
 	err := row.Scan(
 		&item.ID, &mediaType, &item.FileName, &item.ContentType, &item.Size,
 		&item.StoragePath, &item.Description, &item.Tags,
-		&item.Transcript, &item.TranscriptJobID,
+		&item.Transcript, &item.TranscriptJobID, &item.TelegramFileID,
 		&item.CreatedAt, &item.UpdatedAt,
 	)
 	if err != nil {

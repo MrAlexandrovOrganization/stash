@@ -135,8 +135,9 @@ func (h *Handler) deleteItem(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Description *string  `json:"description"`
-		Tags        []string `json:"tags"`
+		Description    *string  `json:"description"`
+		Tags           []string `json:"tags"`
+		TelegramFileID *string  `json:"telegram_file_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON")
@@ -144,8 +145,9 @@ func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meta := model.UpdateMeta{
-		Description: body.Description,
-		Tags:        body.Tags,
+		Description:    body.Description,
+		Tags:           body.Tags,
+		TelegramFileID: body.TelegramFileID,
 	}
 	item, err := h.svc.Update(r.Context(), r.PathValue("id"), meta)
 	if err != nil {

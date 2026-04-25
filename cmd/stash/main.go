@@ -11,9 +11,11 @@ import (
 	"stash/internal/config"
 	"stash/internal/filestore"
 	"stash/internal/handler"
+	"stash/internal/migrate"
 	"stash/internal/repository"
 	"stash/internal/service"
 	"stash/internal/whisper"
+	"stash/migrations"
 )
 
 func main() {
@@ -32,6 +34,11 @@ func main() {
 
 	if err := db.Ping(context.Background()); err != nil {
 		slog.Error("postgres ping", "error", err)
+		os.Exit(1)
+	}
+
+	if err := migrate.Run(context.Background(), db, migrations.FS); err != nil {
+		slog.Error("migrations", "error", err)
 		os.Exit(1)
 	}
 

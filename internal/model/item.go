@@ -22,6 +22,7 @@ type Item struct {
 	Tags            []string  `json:"tags"`
 	Transcript      *string   `json:"transcript,omitempty"`
 	TranscriptJobID *string   `json:"transcript_job_id,omitempty"`
+	TelegramFileID  *string   `json:"telegram_file_id,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -41,6 +42,7 @@ type UploadMeta struct {
 }
 
 type UpdateMeta struct {
-	Description *string
-	Tags        []string
+	Description    *string
+	Tags           []string
+	TelegramFileID *string
 }
