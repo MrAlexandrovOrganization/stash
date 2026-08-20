@@ -40,22 +40,6 @@ services:
     networks:
       - stash-net
 
-  pgadmin:
-    image: dpage/pgadmin4:9.13.0
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
-      PGADMIN_CONFIG_SERVER_MODE: 'False'
-    ports:
-      - "127.0.0.1:5050:80"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    depends_on:
-      - postgres
-    networks:
-      - stash-net
-
 networks:
   stash-net:
   stash-api-net:
@@ -72,4 +56,3 @@ networks:
 
 volumes:
   postgres-data:
-  pgadmin_data:
