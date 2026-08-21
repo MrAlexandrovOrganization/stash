@@ -14,6 +14,7 @@ import (
 	"stash/internal/migrate"
 	"stash/internal/repository"
 	"stash/internal/service"
+	"stash/internal/vision"
 	"stash/internal/whisper"
 	"stash/migrations"
 )
@@ -61,7 +62,13 @@ func main() {
 		slog.Info("whisper connected", "host", cfg.WhisperHost, "port", cfg.WhisperPort)
 	}
 
-	svc := service.New(repo, fs, wc)
+	var vp vision.Provider
+	if cfg.OllamaURL != "" {
+		vp = vision.NewOllama(cfg.OllamaURL, cfg.OllamaModel)
+		slog.Info("vision provider enabled", "url", cfg.OllamaURL, "model", cfg.OllamaModel)
+	}
+
+	svc := service.New(repo, fs, wc, vp)
 	h := handler.New(svc)
 
 	mux := http.NewServeMux()

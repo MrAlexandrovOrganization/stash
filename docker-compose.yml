@@ -10,7 +10,7 @@ services:
       MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
       WHISPER_HOST: "${WHISPER_HOST:-}"
       WHISPER_PORT: "${WHISPER_PORT:-50053}"
-      OLLAMA_URL: "${OLLAMA_URL:-}"
+      OLLAMA_URL: "${OLLAMA_URL:-http://ollama:11434}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-llava}"
     depends_on:
       postgres:

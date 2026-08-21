@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"stash/internal/model"
@@ -52,12 +53,14 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meta := model.UploadMeta{
-		Type:        detectMediaType(header, contentType),
-		FileName:    header.Filename,
-		ContentType: contentType,
-		Size:        header.Size,
-		Description: r.FormValue("description"),
-		Tags:        parseTags(r.FormValue("tags")),
+		Type:            detectMediaType(header, contentType),
+		FileName:        header.Filename,
+		ContentType:     contentType,
+		Size:            header.Size,
+		Description:     r.FormValue("description"),
+		Tags:            parseTags(r.FormValue("tags")),
+		Source:          r.FormValue("source"),
+		OriginalCaption: r.FormValue("original_caption"),
 	}
 
 	item, err := h.svc.Upload(r.Context(), file, meta)
@@ -74,6 +77,16 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 	q := model.SearchQuery{
 		Text: r.URL.Query().Get("q"),
 		Tags: parseTags(r.URL.Query().Get("tags")),
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			q.Limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			q.Offset = n
+		}
 	}
 	items, err := h.svc.Search(r.Context(), q)
 	if err != nil {
@@ -137,6 +150,7 @@ func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Description    *string  `json:"description"`
 		Tags           []string `json:"tags"`
+		Transcript     *string  `json:"transcript"`
 		TelegramFileID *string  `json:"telegram_file_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -147,6 +161,7 @@ func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 	meta := model.UpdateMeta{
 		Description:    body.Description,
 		Tags:           body.Tags,
+		Transcript:     body.Transcript,
 		TelegramFileID: body.TelegramFileID,
 	}
 	item, err := h.svc.Update(r.Context(), r.PathValue("id"), meta)

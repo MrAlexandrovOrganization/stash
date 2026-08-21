@@ -14,4 +14,5 @@ type Repository interface {
 	SetTranscriptJob(ctx context.Context, id, jobID string) error
 	UpdateTranscript(ctx context.Context, id, transcript string) error
 	PendingTranscripts(ctx context.Context) ([]*model.Item, error)
+	SetAIDescription(ctx context.Context, id, description string) error
 }

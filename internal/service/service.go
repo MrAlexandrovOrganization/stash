@@ -14,6 +14,7 @@ import (
 	"stash/internal/filestore"
 	"stash/internal/model"
 	"stash/internal/repository"
+	"stash/internal/vision"
 	"stash/internal/whisper"
 )
 
@@ -30,14 +31,16 @@ type svc struct {
 	repo      repository.Repository
 	files     filestore.FileStore
 	whisper   *whisper.Client
+	vision    vision.Provider
 	pollDelay time.Duration
 }
 
-func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Client) Service {
+func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Client, vp vision.Provider) Service {
 	s := &svc{
 		repo:      repo,
 		files:     files,
 		whisper:   wc,
+		vision:    vp,
 		pollDelay: 5 * time.Second,
 	}
 	if wc != nil {
@@ -56,16 +59,18 @@ func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*
 	}
 
 	item := &model.Item{
-		ID:          id,
-		Type:        meta.Type,
-		FileName:    meta.FileName,
-		ContentType: meta.ContentType,
-		Size:        meta.Size,
-		StoragePath: path,
-		Description: meta.Description,
-		Tags:        meta.Tags,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:              id,
+		Type:            meta.Type,
+		FileName:        meta.FileName,
+		ContentType:     meta.ContentType,
+		Size:            meta.Size,
+		StoragePath:     path,
+		Description:     meta.Description,
+		Tags:            meta.Tags,
+		Source:          meta.Source,
+		OriginalCaption: meta.OriginalCaption,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if item.Tags == nil {
 		item.Tags = []string{}
@@ -78,6 +83,9 @@ func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*
 
 	if meta.Type == model.MediaTypeVideo && s.whisper != nil {
 		go s.submitTranscription(item.ID, path, meta.ContentType)
+	}
+	if isDescribable(meta.ContentType) && s.vision != nil {
+		go s.generateAIDescription(item.ID, path)
 	}
 
 	return item, nil
@@ -183,6 +191,45 @@ func (s *svc) pollPendingTranscripts() {
 			}
 		}
 	}
+}
+
+// generateAIDescription asks the vision provider to describe the stored file
+// and persists the result. Runs in a goroutine; errors are logged.
+func (s *svc) generateAIDescription(itemID, path string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	rc, err := s.files.Get(ctx, path)
+	if err != nil {
+		slog.Error("ai description: get file", "item", itemID, "error", err)
+		return
+	}
+	defer rc.Close()
+
+	desc, err := s.vision.Describe(ctx, rc)
+	if err != nil {
+		slog.Error("ai description: describe", "item", itemID, "error", err)
+		return
+	}
+
+	if err := s.repo.SetAIDescription(ctx, itemID, desc); err != nil {
+		slog.Error("ai description: save", "item", itemID, "error", err)
+	} else {
+		slog.Info("ai description done", "item", itemID)
+	}
+}
+
+// isDescribable reports whether the vision provider can work with this content type.
+func isDescribable(contentType string) bool {
+	mt, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	switch mt {
+	case "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/heic":
+		return true
+	}
+	return false
 }
 
 func formatFromContentType(contentType, path string) string {

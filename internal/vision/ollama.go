@@ -1,4 +1,4 @@
-package ollama
+package vision
 
 import (
 	"bytes"
@@ -10,23 +10,28 @@ import (
 	"net/http"
 )
 
-type Client struct {
+// Ollama is a vision.Provider backed by a local Ollama instance running a
+// vision-capable model (e.g. llava, moondream, qwen2.5-vl).
+type Ollama struct {
 	baseURL string
 	model   string
+	prompt  string
 	http    *http.Client
 }
 
-func NewClient(baseURL, model string) *Client {
-	return &Client{
+var _ Provider = (*Ollama)(nil)
+
+func NewOllama(baseURL, model string) *Ollama {
+	return &Ollama{
 		baseURL: baseURL,
 		model:   model,
+		prompt:  "Опиши это изображение подробно: что изображено, объекты, люди, текст на картинке, атмосфера. Ответь одним абзацем.",
 		http:    &http.Client{},
 	}
 }
 
-// DescribeImage sends an image to ollama and returns a generated description.
-// Requires a vision-capable model (e.g. llava, moondream).
-func (c *Client) DescribeImage(ctx context.Context, r io.Reader) (string, error) {
+// Describe sends the image to Ollama and returns the generated description.
+func (c *Ollama) Describe(ctx context.Context, r io.Reader) (string, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return "", fmt.Errorf("read image: %w", err)
@@ -34,7 +39,7 @@ func (c *Client) DescribeImage(ctx context.Context, r io.Reader) (string, error)
 
 	body, err := json.Marshal(map[string]any{
 		"model":  c.model,
-		"prompt": "Describe this image in detail.",
+		"prompt": c.prompt,
 		"images": []string{base64.StdEncoding.EncodeToString(data)},
 		"stream": false,
 	})

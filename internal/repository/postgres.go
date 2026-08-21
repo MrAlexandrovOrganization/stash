@@ -19,22 +19,27 @@ func NewPostgres(db *pgxpool.Pool) Repository {
 	return &postgres{db: db}
 }
 
+const itemColumns = `id, type, file_name, content_type, size, storage_path, description, tags,
+	source, original_caption, transcript, ai_description, transcript_job_id, telegram_file_id,
+	created_at, updated_at`
+
 func (r *postgres) Save(ctx context.Context, item *model.Item) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO items (id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, telegram_file_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		INSERT INTO items (id, type, file_name, content_type, size, storage_path, description, tags,
+			source, original_caption, transcript, ai_description, transcript_job_id, telegram_file_id,
+			created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		item.ID, string(item.Type), item.FileName, item.ContentType, item.Size,
 		item.StoragePath, item.Description, item.Tags,
-		item.Transcript, item.TranscriptJobID, item.TelegramFileID,
+		item.Source, item.OriginalCaption,
+		item.Transcript, item.AIDescription, item.TranscriptJobID, item.TelegramFileID,
 		item.CreatedAt, item.UpdatedAt,
 	)
 	return err
 }
 
 func (r *postgres) Get(ctx context.Context, id string) (*model.Item, error) {
-	row := r.db.QueryRow(ctx, `
-		SELECT id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, telegram_file_id, created_at, updated_at
-		FROM items WHERE id = $1`, id)
+	row := r.db.QueryRow(ctx, `SELECT `+itemColumns+` FROM items WHERE id = $1`, id)
 	return scanItem(row)
 }
 
@@ -55,8 +60,11 @@ func (r *postgres) Search(ctx context.Context, q model.SearchQuery) ([]*model.It
 	i := 1
 
 	if q.Text != "" {
+		// Full-text-ish search across every textual field: description,
+		// transcript, original caption, AI description and tags.
 		conds = append(conds, fmt.Sprintf(
-			"(description ILIKE $%d OR transcript ILIKE $%d)", i, i,
+			"(description ILIKE $%d OR transcript ILIKE $%d OR original_caption ILIKE $%d OR ai_description ILIKE $%d OR EXISTS (SELECT 1 FROM unnest(tags) AS t WHERE t ILIKE $%d))",
+			i, i, i, i, i,
 		))
 		args = append(args, "%"+q.Text+"%")
 		i++
@@ -72,9 +80,16 @@ func (r *postgres) Search(ctx context.Context, q model.SearchQuery) ([]*model.It
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 
-	rows, err := r.db.Query(ctx, fmt.Sprintf(`
-		SELECT id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, telegram_file_id, created_at, updated_at
-		FROM items %s ORDER BY created_at DESC`, where), args...)
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM items %s ORDER BY created_at DESC`, itemColumns, where)
+
+	if q.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", i, i+1)
+		args = append(args, q.Limit, q.Offset)
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +119,11 @@ func (r *postgres) Update(ctx context.Context, id string, meta model.UpdateMeta)
 	if meta.Tags != nil {
 		sets = append(sets, fmt.Sprintf("tags = $%d", i))
 		args = append(args, meta.Tags)
+		i++
+	}
+	if meta.Transcript != nil {
+		sets = append(sets, fmt.Sprintf("transcript = $%d", i))
+		args = append(args, *meta.Transcript)
 		i++
 	}
 	if meta.TelegramFileID != nil {
@@ -151,7 +171,7 @@ func (r *postgres) UpdateTranscript(ctx context.Context, id, transcript string) 
 
 func (r *postgres) PendingTranscripts(ctx context.Context) ([]*model.Item, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, type, file_name, content_type, size, storage_path, description, tags, transcript, transcript_job_id, telegram_file_id, created_at, updated_at
+		SELECT `+itemColumns+`
 		FROM items WHERE transcript_job_id IS NOT NULL`)
 	if err != nil {
 		return nil, err
@@ -169,6 +189,14 @@ func (r *postgres) PendingTranscripts(ctx context.Context) ([]*model.Item, error
 	return items, rows.Err()
 }
 
+func (r *postgres) SetAIDescription(ctx context.Context, id, description string) error {
+	_, err := r.db.Exec(ctx,
+		"UPDATE items SET ai_description = $1, updated_at = $2 WHERE id = $3",
+		description, time.Now(), id,
+	)
+	return err
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -179,7 +207,8 @@ func scanItem(row scanner) (*model.Item, error) {
 	err := row.Scan(
 		&item.ID, &mediaType, &item.FileName, &item.ContentType, &item.Size,
 		&item.StoragePath, &item.Description, &item.Tags,
-		&item.Transcript, &item.TranscriptJobID, &item.TelegramFileID,
+		&item.Source, &item.OriginalCaption,
+		&item.Transcript, &item.AIDescription, &item.TranscriptJobID, &item.TelegramFileID,
 		&item.CreatedAt, &item.UpdatedAt,
 	)
 	if err != nil {
