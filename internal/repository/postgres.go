@@ -54,10 +54,19 @@ func (r *postgres) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// defaultSearchLimit bounds an unbounded Search so the backend never scans and
+// serializes the entire table. Callers may override via q.Limit.
+const defaultSearchLimit = 1000
+
 func (r *postgres) Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error) {
 	var conds []string
 	var args []any
 	i := 1
+
+	limit := q.Limit
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
 
 	if q.Text != "" {
 		// Full-text-ish search across every textual field: description,
@@ -87,6 +96,9 @@ func (r *postgres) Search(ctx context.Context, q model.SearchQuery) ([]*model.It
 	if q.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", i, i+1)
 		args = append(args, q.Limit, q.Offset)
+	} else {
+		query += fmt.Sprintf(" LIMIT $%d", i)
+		args = append(args, limit)
 	}
 
 	rows, err := r.db.Query(ctx, query, args...)
