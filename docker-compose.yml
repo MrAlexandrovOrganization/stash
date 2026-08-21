@@ -21,6 +21,11 @@ services:
       - minio-net
       - whisper-net
       - ollama-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
 
   postgres:
     image: postgres:17-alpine
@@ -39,6 +44,11 @@ services:
       retries: 5
     networks:
       - stash-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
 
 networks:
   stash-net:
