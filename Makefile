@@ -48,9 +48,12 @@ format:
 build:
 	go build -o $(BINARY) ./cmd/stash
 
+# The backend stack owns ONLY the "stash" service (postgres starts as its
+# dependency). It must never start the bot — that lives in the stash-bot repo.
+# Targeting "stash" explicitly prevents accidentally bringing up other services.
 .PHONY: up
 up:
-	$(DOCKER_COMPOSE) up -d --build
+	$(DOCKER_COMPOSE) up -d --build stash
 
 .PHONY: down
 down:
@@ -58,11 +61,11 @@ down:
 
 .PHONY: logs
 logs:
-	$(DOCKER_COMPOSE) logs -f
+	$(DOCKER_COMPOSE) logs -f stash
 
 .PHONY: deploy
 deploy:
-	$(DOCKER_COMPOSE) up -d --build --no-cache
+	$(DOCKER_COMPOSE) up -d --build --no-cache stash
 
 .PHONY: restart
 restart:
