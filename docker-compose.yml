@@ -10,8 +10,10 @@ services:
       MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
       WHISPER_HOST: "${WHISPER_HOST:-}"
       WHISPER_PORT: "${WHISPER_PORT:-50053}"
-      OLLAMA_URL: "${OLLAMA_URL:-http://ollama:11434}"
-      OLLAMA_MODEL: "${OLLAMA_MODEL:-llava}"
+      # Hardcoded so a stray empty OLLAMA_URL in .env cannot silently disable
+      # the vision provider. Override here only if Ollama lives elsewhere.
+      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5vl:3b}"
       AI_DESCRIPTION_BACKFILL_INTERVAL: "${AI_DESCRIPTION_BACKFILL_INTERVAL:-5m}"
       AI_DESCRIPTION_BACKFILL_BATCH: "${AI_DESCRIPTION_BACKFILL_BATCH:-5}"
     depends_on:
