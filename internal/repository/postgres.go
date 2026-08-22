@@ -209,6 +209,35 @@ func (r *postgres) SetAIDescription(ctx context.Context, id, description string)
 	return err
 }
 
+// PendingAIDescriptions returns up to limit items that are describable
+// (images/gifs) but still lack an AI description. Used by the background
+// backfill worker to catch items missed at upload time.
+func (r *postgres) PendingAIDescriptions(ctx context.Context, limit int) ([]*model.Item, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT `+itemColumns+`
+		FROM items
+		WHERE ai_description IS NULL AND type IN ('image', 'gif')
+		ORDER BY created_at ASC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*model.Item
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }

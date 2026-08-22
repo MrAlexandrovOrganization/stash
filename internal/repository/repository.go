@@ -15,4 +15,5 @@ type Repository interface {
 	UpdateTranscript(ctx context.Context, id, transcript string) error
 	PendingTranscripts(ctx context.Context) ([]*model.Item, error)
 	SetAIDescription(ctx context.Context, id, description string) error
+	PendingAIDescriptions(ctx context.Context, limit int) ([]*model.Item, error)
 }

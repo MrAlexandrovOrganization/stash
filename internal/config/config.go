@@ -20,6 +20,13 @@ type Config struct {
 
 	OllamaURL   string
 	OllamaModel string
+
+	// AIDescriptionBackfillInterval controls how often the background worker
+	// scans for items without an AI description and generates them.
+	// Accepts a Go duration string (e.g. "5m"). Empty disables the worker.
+	AIDescriptionBackfillInterval string
+	// AIDescriptionBackfillBatch is how many items are processed per scan.
+	AIDescriptionBackfillBatch int
 }
 
 func Load() (*Config, error) {
@@ -34,6 +41,9 @@ func Load() (*Config, error) {
 		WhisperPort:    getenv("WHISPER_PORT", "50053"),
 		OllamaURL:      getenv("OLLAMA_URL", ""),
 		OllamaModel:    getenv("OLLAMA_MODEL", "llava"),
+
+		AIDescriptionBackfillInterval: getenv("AI_DESCRIPTION_BACKFILL_INTERVAL", "5m"),
+		AIDescriptionBackfillBatch:    atoiDefault(getenv("AI_DESCRIPTION_BACKFILL_BATCH", "5"), 5),
 	}
 
 	if cfg.MinioAccessKey == "" {
@@ -51,4 +61,18 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func atoiDefault(s string, def int) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return def
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n <= 0 {
+		return def
+	}
+	return n
 }

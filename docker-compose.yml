@@ -12,6 +12,8 @@ services:
       WHISPER_PORT: "${WHISPER_PORT:-50053}"
       OLLAMA_URL: "${OLLAMA_URL:-http://ollama:11434}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-llava}"
+      AI_DESCRIPTION_BACKFILL_INTERVAL: "${AI_DESCRIPTION_BACKFILL_INTERVAL:-5m}"
+      AI_DESCRIPTION_BACKFILL_BATCH: "${AI_DESCRIPTION_BACKFILL_BATCH:-5}"
     depends_on:
       postgres:
         condition: service_healthy

@@ -33,9 +33,12 @@ type svc struct {
 	whisper   *whisper.Client
 	vision    vision.Provider
 	pollDelay time.Duration
+
+	aiBackfillInterval time.Duration
+	aiBackfillBatch    int
 }
 
-func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Client, vp vision.Provider) Service {
+func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Client, vp vision.Provider, opts ...Option) Service {
 	s := &svc{
 		repo:      repo,
 		files:     files,
@@ -43,10 +46,29 @@ func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Clie
 		vision:    vp,
 		pollDelay: 5 * time.Second,
 	}
+	for _, o := range opts {
+		o(s)
+	}
 	if wc != nil {
 		go s.transcriptPoller()
 	}
+	if vp != nil && s.aiBackfillInterval > 0 {
+		go s.aiBackfillPoller(s.aiBackfillInterval)
+		slog.Info("ai description backfill enabled", "interval", s.aiBackfillInterval, "batch", s.aiBackfillBatch)
+	}
 	return s
+}
+
+// Option configures optional service behaviour.
+type Option func(*svc)
+
+// WithAIBackfill enables the periodic worker that generates missing AI
+// descriptions. interval is a parsed Go duration; batch is items per scan.
+func WithAIBackfill(interval time.Duration, batch int) Option {
+	return func(s *svc) {
+		s.aiBackfillInterval = interval
+		s.aiBackfillBatch = batch
+	}
 }
 
 func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*model.Item, error) {
@@ -85,7 +107,7 @@ func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*
 		go s.submitTranscription(item.ID, path, meta.ContentType)
 	}
 	if isDescribable(meta.ContentType) && s.vision != nil {
-		go s.generateAIDescription(item.ID, path)
+		go s.runAIDescription(item.ID, path)
 	}
 
 	return item, nil
@@ -193,9 +215,10 @@ func (s *svc) pollPendingTranscripts() {
 	}
 }
 
-// generateAIDescription asks the vision provider to describe the stored file
-// and persists the result. Runs in a goroutine; errors are logged.
-func (s *svc) generateAIDescription(itemID, path string) {
+// runAIDescription asks the vision provider to describe the stored file and
+// persists the result. It is synchronous; callers decide on concurrency
+// (a goroutine on upload, a sequential loop in the backfill worker).
+func (s *svc) runAIDescription(itemID, path string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -216,6 +239,32 @@ func (s *svc) generateAIDescription(itemID, path string) {
 		slog.Error("ai description: save", "item", itemID, "error", err)
 	} else {
 		slog.Info("ai description done", "item", itemID)
+	}
+}
+
+// aiBackfillPoller periodically generates missing AI descriptions so that
+// items uploaded while Ollama was down (or before it existed) are eventually
+// described. Items are processed sequentially to avoid overloading a
+// single-parallel Ollama instance.
+func (s *svc) aiBackfillPoller(interval time.Duration) {
+	for range time.Tick(interval) {
+		s.backfillPendingAIDescriptions()
+	}
+}
+
+func (s *svc) backfillPendingAIDescriptions() {
+	ctx := context.Background()
+	items, err := s.repo.PendingAIDescriptions(ctx, s.aiBackfillBatch)
+	if err != nil {
+		slog.Error("ai backfill: list", "error", err)
+		return
+	}
+	if len(items) == 0 {
+		return
+	}
+	slog.Info("ai backfill: processing", "count", len(items))
+	for _, item := range items {
+		s.runAIDescription(item.ID, item.StoragePath)
 	}
 }
 

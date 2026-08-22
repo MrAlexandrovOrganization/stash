@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"stash/internal/config"
@@ -68,7 +69,16 @@ func main() {
 		slog.Info("vision provider enabled", "url", cfg.OllamaURL, "model", cfg.OllamaModel)
 	}
 
-	svc := service.New(repo, fs, wc, vp)
+	var svcOpts []service.Option
+	if vp != nil && cfg.AIDescriptionBackfillInterval != "" {
+		if d, err := time.ParseDuration(cfg.AIDescriptionBackfillInterval); err == nil && d > 0 {
+			svcOpts = append(svcOpts, service.WithAIBackfill(d, cfg.AIDescriptionBackfillBatch))
+		} else if cfg.AIDescriptionBackfillInterval != "" {
+			slog.Warn("invalid AI_DESCRIPTION_BACKFILL_INTERVAL, backfill disabled", "value", cfg.AIDescriptionBackfillInterval)
+		}
+	}
+
+	svc := service.New(repo, fs, wc, vp, svcOpts...)
 	h := handler.New(svc)
 
 	mux := http.NewServeMux()
