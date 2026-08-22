@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -235,9 +236,24 @@ func (s *svc) runAIDescription(itemID, path string) {
 	}
 	defer rc.Close()
 
-	desc, err := s.vision.Describe(ctx, rc)
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		slog.Error("ai description: read file", "item", itemID, "error", err)
+		return
+	}
+	slog.Info("ai description: image bytes", "item", itemID, "bytes", len(data))
+	if len(data) == 0 {
+		slog.Warn("ai description: empty image bytes, marking failed", "item", itemID)
+		_ = s.repo.SetAIDescriptionError(ctx, itemID, "empty image bytes from storage")
+		return
+	}
+
+	desc, err := s.vision.Describe(ctx, bytes.NewReader(data))
 	if err != nil {
 		slog.Error("ai description: describe", "item", itemID, "error", err)
+		// Permanent-looking failure (e.g. Ollama 400 "failed to decode image
+		// bytes"): record it so the backfill stops retrying this item forever.
+		_ = s.repo.SetAIDescriptionError(ctx, itemID, err.Error())
 		return
 	}
 	if strings.TrimSpace(desc) == "" {

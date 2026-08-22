@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // Ollama is a vision.Provider backed by a local Ollama instance running a
@@ -60,7 +61,8 @@ func (c *Ollama) Describe(ctx context.Context, r io.Reader) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ollama status %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("ollama status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var result struct {

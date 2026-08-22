@@ -203,15 +203,15 @@ func (r *postgres) PendingTranscripts(ctx context.Context) ([]*model.Item, error
 
 func (r *postgres) SetAIDescription(ctx context.Context, id, description string) error {
 	_, err := r.db.Exec(ctx,
-		"UPDATE items SET ai_description = $1, updated_at = $2 WHERE id = $3",
+		"UPDATE items SET ai_description = $1, ai_description_error = NULL, updated_at = $2 WHERE id = $3",
 		description, time.Now(), id,
 	)
 	return err
 }
 
-// PendingAIDescriptions returns up to limit items that are describable
-// (images/gifs) but still lack an AI description. Used by the background
-// backfill worker to catch items missed at upload time.
+// PendingAIDescriptions returns up to limit describable items (images/gifs)
+// that still lack an AI description and have not previously failed. Newest
+// first, so a permanently-failing old item cannot block the whole queue.
 func (r *postgres) PendingAIDescriptions(ctx context.Context, limit int) ([]*model.Item, error) {
 	if limit <= 0 {
 		limit = 1
@@ -219,8 +219,10 @@ func (r *postgres) PendingAIDescriptions(ctx context.Context, limit int) ([]*mod
 	rows, err := r.db.Query(ctx, `
 		SELECT `+itemColumns+`
 		FROM items
-		WHERE ai_description IS NULL AND type IN ('image', 'gif')
-		ORDER BY created_at ASC
+		WHERE ai_description IS NULL
+		  AND ai_description_error IS NULL
+		  AND type IN ('image', 'gif')
+		ORDER BY created_at DESC
 		LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -236,6 +238,16 @@ func (r *postgres) PendingAIDescriptions(ctx context.Context, limit int) ([]*mod
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// SetAIDescriptionError records a permanent failure so the backfill worker
+// stops retrying the item. Cleared if a later attempt succeeds.
+func (r *postgres) SetAIDescriptionError(ctx context.Context, id, errMsg string) error {
+	_, err := r.db.Exec(ctx,
+		"UPDATE items SET ai_description_error = $1, updated_at = $2 WHERE id = $3",
+		errMsg, time.Now(), id,
+	)
+	return err
 }
 
 type scanner interface {
