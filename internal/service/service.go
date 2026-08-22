@@ -52,7 +52,13 @@ func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Clie
 	if wc != nil {
 		go s.transcriptPoller()
 	}
-	if vp != nil && s.aiBackfillInterval > 0 {
+	if vp != nil {
+		if s.aiBackfillInterval <= 0 {
+			s.aiBackfillInterval = 5 * time.Minute
+		}
+		if s.aiBackfillBatch <= 0 {
+			s.aiBackfillBatch = 5
+		}
 		go s.aiBackfillPoller(s.aiBackfillInterval)
 		slog.Info("ai description backfill enabled", "interval", s.aiBackfillInterval, "batch", s.aiBackfillBatch)
 	}
@@ -106,7 +112,7 @@ func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*
 	if meta.Type == model.MediaTypeVideo && s.whisper != nil {
 		go s.submitTranscription(item.ID, path, meta.ContentType)
 	}
-	if isDescribable(meta.ContentType) && s.vision != nil {
+	if (item.Type == model.MediaTypeImage || item.Type == model.MediaTypeGIF) && s.vision != nil {
 		go s.runAIDescription(item.ID, path)
 	}
 
@@ -232,6 +238,12 @@ func (s *svc) runAIDescription(itemID, path string) {
 	desc, err := s.vision.Describe(ctx, rc)
 	if err != nil {
 		slog.Error("ai description: describe", "item", itemID, "error", err)
+		return
+	}
+	if strings.TrimSpace(desc) == "" {
+		// Ollama occasionally returns an empty response; do not persist it,
+		// otherwise the backfill would treat the item as "done" and skip it.
+		slog.Warn("ai description: empty response, skipping", "item", itemID)
 		return
 	}
 

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -67,14 +69,14 @@ func main() {
 	if cfg.OllamaURL != "" {
 		vp = vision.NewOllama(cfg.OllamaURL, cfg.OllamaModel)
 		slog.Info("vision provider enabled", "url", cfg.OllamaURL, "model", cfg.OllamaModel)
+		probeOllama(cfg.OllamaURL)
 	}
 
 	var svcOpts []service.Option
-	if vp != nil && cfg.AIDescriptionBackfillInterval != "" {
+	if vp != nil {
+		// Interval from env is optional; New() falls back to a 5m default.
 		if d, err := time.ParseDuration(cfg.AIDescriptionBackfillInterval); err == nil && d > 0 {
 			svcOpts = append(svcOpts, service.WithAIBackfill(d, cfg.AIDescriptionBackfillBatch))
-		} else if cfg.AIDescriptionBackfillInterval != "" {
-			slog.Warn("invalid AI_DESCRIPTION_BACKFILL_INTERVAL, backfill disabled", "value", cfg.AIDescriptionBackfillInterval)
 		}
 	}
 
@@ -89,4 +91,38 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// probeOllama logs model availability at startup so a missing/unreachable
+// vision model is obvious in the logs instead of failing silently per request.
+func probeOllama(baseURL string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/tags", nil)
+	if err != nil {
+		slog.Warn("ollama probe: build request", "error", err)
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.Warn("ollama probe: unreachable", "url", baseURL, "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		slog.Warn("ollama probe: decode", "error", err)
+		return
+	}
+	names := make([]string, 0, len(out.Models))
+	for _, m := range out.Models {
+		names = append(names, m.Name)
+	}
+	slog.Info("ollama probe: models", "models", strings.Join(names, ", "))
 }
