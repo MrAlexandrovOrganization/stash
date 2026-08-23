@@ -21,18 +21,35 @@ func NewPostgres(db *pgxpool.Pool) Repository {
 
 const itemColumns = `id, type, file_name, content_type, size, storage_path, description, tags,
 	source, original_caption, transcript, ai_description, transcript_job_id, telegram_file_id,
-	created_at, updated_at`
+	file_unique_id, created_at, updated_at`
 
 func (r *postgres) Save(ctx context.Context, item *model.Item) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO items (id, type, file_name, content_type, size, storage_path, description, tags,
 			source, original_caption, transcript, ai_description, transcript_job_id, telegram_file_id,
-			created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+			file_unique_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		ON CONFLICT (id) DO UPDATE SET
+			type = EXCLUDED.type,
+			file_name = EXCLUDED.file_name,
+			content_type = EXCLUDED.content_type,
+			size = EXCLUDED.size,
+			storage_path = EXCLUDED.storage_path,
+			description = EXCLUDED.description,
+			tags = EXCLUDED.tags,
+			source = EXCLUDED.source,
+			original_caption = EXCLUDED.original_caption,
+			transcript = EXCLUDED.transcript,
+			ai_description = EXCLUDED.ai_description,
+			transcript_job_id = EXCLUDED.transcript_job_id,
+			telegram_file_id = EXCLUDED.telegram_file_id,
+			file_unique_id = EXCLUDED.file_unique_id,
+			updated_at = EXCLUDED.updated_at`,
 		item.ID, string(item.Type), item.FileName, item.ContentType, item.Size,
 		item.StoragePath, item.Description, item.Tags,
 		item.Source, item.OriginalCaption,
 		item.Transcript, item.AIDescription, item.TranscriptJobID, item.TelegramFileID,
+		item.FileUniqueID,
 		item.CreatedAt, item.UpdatedAt,
 	)
 	return err
@@ -241,13 +258,28 @@ func (r *postgres) PendingAIDescriptions(ctx context.Context, limit int) ([]*mod
 }
 
 // SetAIDescriptionError records a permanent failure so the backfill worker
-// stops retrying the item. Cleared if a later attempt succeeds.
+// skips the item on subsequent passes.
 func (r *postgres) SetAIDescriptionError(ctx context.Context, id, errMsg string) error {
-	_, err := r.db.Exec(ctx,
-		"UPDATE items SET ai_description_error = $1, updated_at = $2 WHERE id = $3",
-		errMsg, time.Now(), id,
-	)
+	_, err := r.db.Exec(ctx, `
+		UPDATE items SET ai_description_error = $1, updated_at = $2 WHERE id = $3`,
+		errMsg, time.Now(), id)
 	return err
+}
+
+// ClearAIDescriptionError removes a previously recorded failure (e.g. when a
+// re-uploaded file replaces a corrupt one and description generation retries).
+func (r *postgres) ClearAIDescriptionError(ctx context.Context, id string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE items SET ai_description_error = NULL, updated_at = $1 WHERE id = $2`,
+		time.Now(), id)
+	return err
+}
+
+// GetByFileUniqueID returns the item uploaded from the given Telegram file, if
+// any. Used to overwrite duplicates (and repair failed uploads) on re-send.
+func (r *postgres) GetByFileUniqueID(ctx context.Context, fileUniqueID string) (*model.Item, error) {
+	row := r.db.QueryRow(ctx, `SELECT `+itemColumns+` FROM items WHERE file_unique_id = $1`, fileUniqueID)
+	return scanItem(row)
 }
 
 type scanner interface {
@@ -262,6 +294,7 @@ func scanItem(row scanner) (*model.Item, error) {
 		&item.StoragePath, &item.Description, &item.Tags,
 		&item.Source, &item.OriginalCaption,
 		&item.Transcript, &item.AIDescription, &item.TranscriptJobID, &item.TelegramFileID,
+		&item.FileUniqueID,
 		&item.CreatedAt, &item.UpdatedAt,
 	)
 	if err != nil {

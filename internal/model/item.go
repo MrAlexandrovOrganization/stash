@@ -26,6 +26,7 @@ type Item struct {
 	AIDescription   *string   `json:"ai_description,omitempty"`
 	TranscriptJobID *string   `json:"transcript_job_id,omitempty"`
 	TelegramFileID  *string   `json:"telegram_file_id,omitempty"`
+	FileUniqueID    *string   `json:"file_unique_id,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -46,6 +47,7 @@ type UploadMeta struct {
 	Tags            []string
 	Source          string
 	OriginalCaption string
+	FileUniqueID    string
 }
 
 type UpdateMeta struct {

@@ -79,9 +79,52 @@ func WithAIBackfill(interval time.Duration, batch int) Option {
 }
 
 func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*model.Item, error) {
-	id := uuid.New().String()
 	now := time.Now()
 
+	// Deduplicate by Telegram's stable file_unique_id: re-sending the same file
+	// (or re-sending one that previously failed) overwrites the existing record
+	// in place instead of creating a duplicate.
+	if meta.FileUniqueID != "" {
+		if existing, err := s.repo.GetByFileUniqueID(ctx, meta.FileUniqueID); err == nil && existing != nil {
+			path, perr := s.files.Put(ctx, existing.ID, meta.FileName, r, meta.Size, meta.ContentType)
+			if perr != nil {
+				return nil, fmt.Errorf("store file: %w", perr)
+			}
+			// Only remove the old object if the storage path actually changed.
+			if path != existing.StoragePath {
+				_ = s.files.Delete(ctx, existing.StoragePath)
+			}
+
+			fu := meta.FileUniqueID
+			updated := &model.Item{
+				ID:              existing.ID,
+				Type:            meta.Type,
+				FileName:        meta.FileName,
+				ContentType:     meta.ContentType,
+				Size:            meta.Size,
+				StoragePath:     path,
+				Description:     meta.Description,
+				Tags:            meta.Tags,
+				Source:          meta.Source,
+				OriginalCaption: meta.OriginalCaption,
+				FileUniqueID:    &fu,
+				CreatedAt:       existing.CreatedAt,
+				UpdatedAt:       now,
+			}
+			if updated.Tags == nil {
+				updated.Tags = []string{}
+			}
+			if serr := s.repo.Save(ctx, updated); serr != nil {
+				_ = s.files.Delete(ctx, path)
+				return nil, fmt.Errorf("save item: %w", serr)
+			}
+			_ = s.repo.ClearAIDescriptionError(ctx, existing.ID)
+			s.processUploadedMedia(existing.ID, path, meta)
+			return updated, nil
+		}
+	}
+
+	id := uuid.New().String()
 	path, err := s.files.Put(ctx, id, meta.FileName, r, meta.Size, meta.ContentType)
 	if err != nil {
 		return nil, fmt.Errorf("store file: %w", err)
@@ -104,20 +147,29 @@ func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*
 	if item.Tags == nil {
 		item.Tags = []string{}
 	}
+	if meta.FileUniqueID != "" {
+		fu := meta.FileUniqueID
+		item.FileUniqueID = &fu
+	}
 
 	if err := s.repo.Save(ctx, item); err != nil {
 		_ = s.files.Delete(ctx, path)
 		return nil, fmt.Errorf("save item: %w", err)
 	}
 
-	if meta.Type == model.MediaTypeVideo && s.whisper != nil {
-		go s.submitTranscription(item.ID, path, meta.ContentType)
-	}
-	if (item.Type == model.MediaTypeImage || item.Type == model.MediaTypeGIF) && s.vision != nil {
-		go s.runAIDescription(item.ID, path)
-	}
-
+	s.processUploadedMedia(item.ID, path, meta)
 	return item, nil
+}
+
+// processUploadedMedia kicks off async media processing (transcription for
+// video, AI description for images/GIFs) after a successful upload.
+func (s *svc) processUploadedMedia(id, path string, meta model.UploadMeta) {
+	if meta.Type == model.MediaTypeVideo && s.whisper != nil {
+		go s.submitTranscription(id, path, meta.ContentType)
+	}
+	if (meta.Type == model.MediaTypeImage || meta.Type == model.MediaTypeGIF) && s.vision != nil {
+		go s.runAIDescription(id, path)
+	}
 }
 
 func (s *svc) Get(ctx context.Context, id string) (*model.Item, error) {

@@ -16,5 +16,7 @@ type Repository interface {
 	PendingTranscripts(ctx context.Context) ([]*model.Item, error)
 	SetAIDescription(ctx context.Context, id, description string) error
 	SetAIDescriptionError(ctx context.Context, id, errMsg string) error
+	ClearAIDescriptionError(ctx context.Context, id string) error
+	GetByFileUniqueID(ctx context.Context, fileUniqueID string) (*model.Item, error)
 	PendingAIDescriptions(ctx context.Context, limit int) ([]*model.Item, error)
 }

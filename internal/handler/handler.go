@@ -61,6 +61,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		Tags:            parseTags(r.FormValue("tags")),
 		Source:          r.FormValue("source"),
 		OriginalCaption: r.FormValue("original_caption"),
+		FileUniqueID:    r.FormValue("file_unique_id"),
 	}
 
 	item, err := h.svc.Upload(r.Context(), file, meta)
