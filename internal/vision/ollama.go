@@ -11,12 +11,16 @@ import (
 	"strings"
 )
 
+const (
+	imagePrompt = "Опиши это изображение подробно: что изображено, объекты, люди, текст на картинке, атмосфера. Ответь одним абзацем."
+	videoPrompt = "Перед тобой кадры одного видео в хронологическом порядке. Опиши подробно, что в нём происходит: объекты, люди, их действия, текст на экране, атмосфера. Ответь одним абзацем."
+)
+
 // Ollama is a vision.Provider backed by a local Ollama instance running a
 // vision-capable model (e.g. llava, moondream, qwen2.5-vl).
 type Ollama struct {
 	baseURL string
 	model   string
-	prompt  string
 	http    *http.Client
 }
 
@@ -26,22 +30,29 @@ func NewOllama(baseURL, model string) *Ollama {
 	return &Ollama{
 		baseURL: baseURL,
 		model:   model,
-		prompt:  "Опиши это изображение подробно: что изображено, объекты, люди, текст на картинке, атмосфера. Ответь одним абзацем.",
 		http:    &http.Client{},
 	}
 }
 
-// Describe sends the image to Ollama and returns the generated description.
-func (c *Ollama) Describe(ctx context.Context, r io.Reader) (string, error) {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return "", fmt.Errorf("read image: %w", err)
+// Describe sends the frames to Ollama and returns the generated description.
+func (c *Ollama) Describe(ctx context.Context, frames [][]byte) (string, error) {
+	if len(frames) == 0 {
+		return "", fmt.Errorf("no frames to describe")
+	}
+
+	images := make([]string, len(frames))
+	for i, f := range frames {
+		images[i] = base64.StdEncoding.EncodeToString(f)
+	}
+	prompt := imagePrompt
+	if len(frames) > 1 {
+		prompt = videoPrompt
 	}
 
 	body, err := json.Marshal(map[string]any{
 		"model":  c.model,
-		"prompt": c.prompt,
-		"images": []string{base64.StdEncoding.EncodeToString(data)},
+		"prompt": prompt,
+		"images": images,
 		"stream": false,
 	})
 	if err != nil {

@@ -32,6 +32,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /items/{id}/file", h.getFile)
 	mux.HandleFunc("DELETE /items/{id}", h.deleteItem)
 	mux.HandleFunc("PATCH /items/{id}", h.updateItem)
+	mux.HandleFunc("POST /items/{id}/describe", h.describeItem)
 }
 
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +154,7 @@ func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 		Tags           []string `json:"tags"`
 		Transcript     *string  `json:"transcript"`
 		TelegramFileID *string  `json:"telegram_file_id"`
+		FileUniqueID   *string  `json:"file_unique_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON")
@@ -164,6 +166,7 @@ func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 		Tags:           body.Tags,
 		Transcript:     body.Transcript,
 		TelegramFileID: body.TelegramFileID,
+		FileUniqueID:   body.FileUniqueID,
 	}
 	item, err := h.svc.Update(r.Context(), r.PathValue("id"), meta)
 	if err != nil {
@@ -176,6 +179,27 @@ func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+// describeItem triggers on-demand AI description generation for one item.
+// Generation runs asynchronously; the client polls GET /items/{id} for the
+// result (ai_description set) or failure (ai_description_error set).
+func (h *Handler) describeItem(w http.ResponseWriter, r *http.Request) {
+	item, err := h.svc.Describe(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		if errors.Is(err, service.ErrNotDescribable) || errors.Is(err, service.ErrVisionDisabled) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		slog.Error("describe", "error", err)
+		writeErr(w, http.StatusInternalServerError, "describe failed")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, item)
 }
 
 func detectMediaType(header *multipart.FileHeader, contentType string) model.MediaType {

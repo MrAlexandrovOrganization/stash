@@ -3,7 +3,6 @@ package vision
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,11 +21,13 @@ func TestOllamaDescribeAgainstAPIContract(t *testing.T) {
 			t.Fatalf("decode: %v", err)
 		}
 		imgs, _ := payload["images"].([]any)
-		if len(imgs) != 1 {
-			t.Errorf("expected 1 image, got %d", len(imgs))
+		if len(imgs) != 2 {
+			t.Errorf("expected 2 images, got %d", len(imgs))
 		}
-		if _, ok := imgs[0].(string); !ok {
-			t.Errorf("image must be base64 string")
+		for i, img := range imgs {
+			if _, ok := img.(string); !ok {
+				t.Errorf("image %d must be base64 string", i)
+			}
 		}
 		if payload["stream"] != false {
 			t.Errorf("stream must be false")
@@ -40,21 +41,11 @@ func TestOllamaDescribeAgainstAPIContract(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOllama(srv.URL, "qwen2.5vl:3b")
-	got, err := c.Describe(context.Background(), io.NopCloser(stringReader("fake-bytes")))
+	got, err := c.Describe(context.Background(), [][]byte{[]byte("fake-frame-1"), []byte("fake-frame-2")})
 	if err != nil {
 		t.Fatalf("describe: %v", err)
 	}
 	if got != "На изображении кот, сидящий на подоконнике." {
 		t.Fatalf("unexpected description: %q", got)
 	}
-}
-
-type stringReader string
-
-func (s stringReader) Read(p []byte) (int, error) {
-	n := copy(p, s)
-	if n == len(s) {
-		return n, io.EOF
-	}
-	return n, nil
 }

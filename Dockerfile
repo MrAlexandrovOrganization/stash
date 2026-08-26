@@ -6,7 +6,8 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o stash ./cmd/stash
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates
+# ffmpeg extracts video frames for AI descriptions.
+RUN apk add --no-cache ca-certificates ffmpeg
 WORKDIR /app
 COPY --from=builder /app/stash .
 EXPOSE 8080

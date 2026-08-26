@@ -12,23 +12,24 @@ const (
 )
 
 type Item struct {
-	ID              string    `json:"id"`
-	Type            MediaType `json:"type"`
-	FileName        string    `json:"file_name"`
-	ContentType     string    `json:"content_type"`
-	Size            int64     `json:"size"`
-	StoragePath     string    `json:"storage_path"`
-	Description     string    `json:"description"`
-	Tags            []string  `json:"tags"`
-	Source          string    `json:"source"`
-	OriginalCaption string    `json:"original_caption"`
-	Transcript      *string   `json:"transcript,omitempty"`
-	AIDescription   *string   `json:"ai_description,omitempty"`
-	TranscriptJobID *string   `json:"transcript_job_id,omitempty"`
-	TelegramFileID  *string   `json:"telegram_file_id,omitempty"`
-	FileUniqueID    *string   `json:"file_unique_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	Type               MediaType `json:"type"`
+	FileName           string    `json:"file_name"`
+	ContentType        string    `json:"content_type"`
+	Size               int64     `json:"size"`
+	StoragePath        string    `json:"storage_path"`
+	Description        string    `json:"description"`
+	Tags               []string  `json:"tags"`
+	Source             string    `json:"source"`
+	OriginalCaption    string    `json:"original_caption"`
+	Transcript         *string   `json:"transcript,omitempty"`
+	AIDescription      *string   `json:"ai_description,omitempty"`
+	AIDescriptionError *string   `json:"ai_description_error,omitempty"`
+	TranscriptJobID    *string   `json:"transcript_job_id,omitempty"`
+	TelegramFileID     *string   `json:"telegram_file_id,omitempty"`
+	FileUniqueID       *string   `json:"file_unique_id,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type SearchQuery struct {
@@ -55,4 +56,5 @@ type UpdateMeta struct {
 	Tags           []string
 	Transcript     *string
 	TelegramFileID *string
+	FileUniqueID   *string
 }

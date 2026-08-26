@@ -23,10 +23,12 @@ const (
 type JobStatus = pb.JobStatus
 
 const (
-	StatusPending = pb.JobStatus_PENDING
-	StatusRunning = pb.JobStatus_RUNNING
-	StatusDone    = pb.JobStatus_DONE
-	StatusFailed  = pb.JobStatus_FAILED
+	StatusAccepted    = pb.JobStatus_ACCEPTED
+	StatusDownloading = pb.JobStatus_DOWNLOADING
+	StatusQueued      = pb.JobStatus_QUEUED
+	StatusRunning     = pb.JobStatus_RUNNING
+	StatusDone        = pb.JobStatus_DONE
+	StatusFailed      = pb.JobStatus_FAILED
 )
 
 type JobResult struct {

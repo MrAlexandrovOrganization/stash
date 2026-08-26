@@ -20,8 +20,8 @@ func NewPostgres(db *pgxpool.Pool) Repository {
 }
 
 const itemColumns = `id, type, file_name, content_type, size, storage_path, description, tags,
-	source, original_caption, transcript, ai_description, transcript_job_id, telegram_file_id,
-	file_unique_id, created_at, updated_at`
+	source, original_caption, transcript, ai_description, ai_description_error,
+	transcript_job_id, telegram_file_id, file_unique_id, created_at, updated_at`
 
 func (r *postgres) Save(ctx context.Context, item *model.Item) error {
 	_, err := r.db.Exec(ctx, `
@@ -160,6 +160,11 @@ func (r *postgres) Update(ctx context.Context, id string, meta model.UpdateMeta)
 		args = append(args, *meta.TelegramFileID)
 		i++
 	}
+	if meta.FileUniqueID != nil {
+		sets = append(sets, fmt.Sprintf("file_unique_id = $%d", i))
+		args = append(args, *meta.FileUniqueID)
+		i++
+	}
 	if len(sets) == 0 {
 		return nil
 	}
@@ -218,6 +223,38 @@ func (r *postgres) PendingTranscripts(ctx context.Context) ([]*model.Item, error
 	return items, rows.Err()
 }
 
+// PendingTranscriptSubmissions returns videos that were uploaded while Whisper
+// was unavailable (or before it existed) and thus never got a transcription
+// job. Newest first. An empty transcript (as opposed to NULL) marks a job that
+// already failed permanently and is not retried.
+func (r *postgres) PendingTranscriptSubmissions(ctx context.Context, limit int) ([]*model.Item, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT `+itemColumns+`
+		FROM items
+		WHERE type = 'video'
+		  AND transcript IS NULL
+		  AND transcript_job_id IS NULL
+		ORDER BY created_at DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*model.Item
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *postgres) SetAIDescription(ctx context.Context, id, description string) error {
 	_, err := r.db.Exec(ctx,
 		"UPDATE items SET ai_description = $1, ai_description_error = NULL, updated_at = $2 WHERE id = $3",
@@ -226,9 +263,9 @@ func (r *postgres) SetAIDescription(ctx context.Context, id, description string)
 	return err
 }
 
-// PendingAIDescriptions returns up to limit describable items (images/gifs)
-// that still lack an AI description and have not previously failed. Newest
-// first, so a permanently-failing old item cannot block the whole queue.
+// PendingAIDescriptions returns up to limit describable items (images/gifs/
+// videos) that still lack an AI description and have not previously failed.
+// Newest first, so a permanently-failing old item cannot block the whole queue.
 func (r *postgres) PendingAIDescriptions(ctx context.Context, limit int) ([]*model.Item, error) {
 	if limit <= 0 {
 		limit = 1
@@ -238,7 +275,7 @@ func (r *postgres) PendingAIDescriptions(ctx context.Context, limit int) ([]*mod
 		FROM items
 		WHERE ai_description IS NULL
 		  AND ai_description_error IS NULL
-		  AND type IN ('image', 'gif')
+		  AND type IN ('image', 'gif', 'video')
 		ORDER BY created_at DESC
 		LIMIT $1`, limit)
 	if err != nil {
@@ -293,7 +330,8 @@ func scanItem(row scanner) (*model.Item, error) {
 		&item.ID, &mediaType, &item.FileName, &item.ContentType, &item.Size,
 		&item.StoragePath, &item.Description, &item.Tags,
 		&item.Source, &item.OriginalCaption,
-		&item.Transcript, &item.AIDescription, &item.TranscriptJobID, &item.TelegramFileID,
+		&item.Transcript, &item.AIDescription, &item.AIDescriptionError,
+		&item.TranscriptJobID, &item.TelegramFileID,
 		&item.FileUniqueID,
 		&item.CreatedAt, &item.UpdatedAt,
 	)

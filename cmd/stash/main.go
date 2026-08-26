@@ -14,6 +14,7 @@ import (
 	"stash/internal/config"
 	"stash/internal/filestore"
 	"stash/internal/handler"
+	"stash/internal/logx"
 	"stash/internal/migrate"
 	"stash/internal/repository"
 	"stash/internal/service"
@@ -28,6 +29,8 @@ func main() {
 		slog.Error("config", "error", err)
 		os.Exit(1)
 	}
+
+	logx.Setup("stash", cfg.MinioAccessKey, cfg.MinioSecretKey)
 
 	db, err := pgxpool.New(context.Background(), cfg.PGURL)
 	if err != nil {

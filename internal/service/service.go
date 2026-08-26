@@ -1,8 +1,8 @@
 package service
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,7 +26,15 @@ type Service interface {
 	Delete(ctx context.Context, id string) error
 	Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error)
 	Update(ctx context.Context, id string, meta model.UpdateMeta) (*model.Item, error)
+	Describe(ctx context.Context, id string) (*model.Item, error)
 }
+
+// ErrNotDescribable is returned when AI description is requested for a media
+// type the vision provider cannot handle (e.g. documents).
+var ErrNotDescribable = errors.New("media type is not describable")
+
+// ErrVisionDisabled is returned when no vision provider is configured.
+var ErrVisionDisabled = errors.New("vision provider is not configured")
 
 type svc struct {
 	repo      repository.Repository
@@ -162,14 +170,25 @@ func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*
 }
 
 // processUploadedMedia kicks off async media processing (transcription for
-// video, AI description for images/GIFs) after a successful upload.
+// video, AI description for images/GIFs/videos) after a successful upload.
 func (s *svc) processUploadedMedia(id, path string, meta model.UploadMeta) {
 	if meta.Type == model.MediaTypeVideo && s.whisper != nil {
 		go s.submitTranscription(id, path, meta.ContentType)
 	}
-	if (meta.Type == model.MediaTypeImage || meta.Type == model.MediaTypeGIF) && s.vision != nil {
-		go s.runAIDescription(id, path)
+	if describableType(meta.Type) && s.vision != nil {
+		go s.runAIDescription(id, path, meta.ContentType)
 	}
+}
+
+// describableType reports whether the vision pipeline handles this media type.
+// GIFs are stored as mp4 and go through the same frame-extraction path as
+// videos; documents are skipped.
+func describableType(t model.MediaType) bool {
+	switch t {
+	case model.MediaTypeImage, model.MediaTypeGIF, model.MediaTypeVideo:
+		return true
+	}
+	return false
 }
 
 func (s *svc) Get(ctx context.Context, id string) (*model.Item, error) {
@@ -235,10 +254,39 @@ func (s *svc) submitTranscription(itemID, path, contentType string) {
 	slog.Info("transcription submitted", "item", itemID, "job", jobID)
 }
 
-// transcriptPoller runs in the background and polls pending transcription jobs.
+// transcriptPoller runs in the background, polls pending transcription jobs
+// and periodically submits videos that were never transcribed (e.g. uploaded
+// while Whisper was down).
 func (s *svc) transcriptPoller() {
-	for range time.Tick(s.pollDelay) {
-		s.pollPendingTranscripts()
+	tick := time.Tick(s.pollDelay)
+	submitTick := time.Tick(time.Minute)
+	for {
+		select {
+		case <-tick:
+			s.pollPendingTranscripts()
+		case <-submitTick:
+			s.submitMissingTranscripts(transcriptBackfillBatch)
+		}
+	}
+}
+
+// transcriptBackfillBatch bounds how many unsubmitted videos are sent to
+// Whisper per backfill pass.
+const transcriptBackfillBatch = 2
+
+func (s *svc) submitMissingTranscripts(limit int) {
+	ctx := context.Background()
+	items, err := s.repo.PendingTranscriptSubmissions(ctx, limit)
+	if err != nil {
+		slog.Error("transcript backfill: list", "error", err)
+		return
+	}
+	if len(items) == 0 {
+		return
+	}
+	slog.Info("transcript backfill: submitting", "count", len(items))
+	for _, item := range items {
+		s.submitTranscription(item.ID, item.StoragePath, item.ContentType)
 	}
 }
 
@@ -274,11 +322,35 @@ func (s *svc) pollPendingTranscripts() {
 	}
 }
 
+// Describe regenerates the AI description for a single item on demand:
+// clears any previously recorded failure and runs the vision pipeline
+// asynchronously. Returns the item as it was at request time.
+func (s *svc) Describe(ctx context.Context, id string) (*model.Item, error) {
+	if s.vision == nil {
+		return nil, ErrVisionDisabled
+	}
+	item, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !describableType(item.Type) {
+		return nil, ErrNotDescribable
+	}
+	if err := s.repo.ClearAIDescriptionError(ctx, id); err != nil {
+		return nil, fmt.Errorf("clear ai description error: %w", err)
+	}
+	item.AIDescriptionError = nil
+
+	go s.runAIDescription(item.ID, item.StoragePath, item.ContentType)
+	slog.Info("ai description requested", "item", id)
+	return item, nil
+}
+
 // runAIDescription asks the vision provider to describe the stored file and
 // persists the result. It is synchronous; callers decide on concurrency
 // (a goroutine on upload, a sequential loop in the backfill worker).
-func (s *svc) runAIDescription(itemID, path string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+func (s *svc) runAIDescription(itemID, path, contentType string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	rc, err := s.files.Get(ctx, path)
@@ -288,19 +360,37 @@ func (s *svc) runAIDescription(itemID, path string) {
 	}
 	defer rc.Close()
 
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		slog.Error("ai description: read file", "item", itemID, "error", err)
-		return
+	var frames [][]byte
+	if describableContentType(contentType) == "image" {
+		data, err := io.ReadAll(rc)
+		if err != nil {
+			slog.Error("ai description: read file", "item", itemID, "error", err)
+			return
+		}
+		frames = [][]byte{data}
+	} else {
+		// Videos/GIFs: sample several frames across the clip so the vision
+		// model sees what happens in it, not just how it starts.
+		var err error
+		frames, err = extractFrames(ctx, rc)
+		if err != nil {
+			slog.Error("ai description: extract frames", "item", itemID, "error", err)
+			_ = s.repo.SetAIDescriptionError(ctx, itemID, "extract frames: "+err.Error())
+			return
+		}
 	}
-	slog.Info("ai description: image bytes", "item", itemID, "bytes", len(data))
-	if len(data) == 0 {
+	total := 0
+	for _, f := range frames {
+		total += len(f)
+	}
+	slog.Info("ai description: frame bytes", "item", itemID, "frames", len(frames), "bytes", total)
+	if total == 0 {
 		slog.Warn("ai description: empty image bytes, marking failed", "item", itemID)
 		_ = s.repo.SetAIDescriptionError(ctx, itemID, "empty image bytes from storage")
 		return
 	}
 
-	desc, err := s.vision.Describe(ctx, bytes.NewReader(data))
+	desc, err := s.vision.Describe(ctx, frames)
 	if err != nil {
 		slog.Error("ai description: describe", "item", itemID, "error", err)
 		// Permanent-looking failure (e.g. Ollama 400 "failed to decode image
@@ -344,21 +434,25 @@ func (s *svc) backfillPendingAIDescriptions() {
 	}
 	slog.Info("ai backfill: processing", "count", len(items))
 	for _, item := range items {
-		s.runAIDescription(item.ID, item.StoragePath)
+		s.runAIDescription(item.ID, item.StoragePath, item.ContentType)
 	}
 }
 
-// isDescribable reports whether the vision provider can work with this content type.
-func isDescribable(contentType string) bool {
+// describableContentType classifies a content type for the vision pipeline:
+// "image" goes to the model as-is, "video" needs frame extraction, "" is not
+// handled (e.g. documents).
+func describableContentType(contentType string) string {
 	mt, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return false
+		return ""
 	}
-	switch mt {
-	case "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/heic":
-		return true
+	switch {
+	case strings.HasPrefix(mt, "image/"):
+		return "image"
+	case strings.HasPrefix(mt, "video/"):
+		return "video"
 	}
-	return false
+	return ""
 }
 
 func formatFromContentType(contentType, path string) string {
