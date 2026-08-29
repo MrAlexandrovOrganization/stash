@@ -20,6 +20,10 @@ type Config struct {
 
 	OllamaURL   string
 	OllamaModel string
+	// OllamaNumCtx sets the vision model context window (tokens) sent to
+	// Ollama via options.num_ctx. 0 leaves Ollama's default (often 4096,
+	// which is too small for multi-frame/video requests).
+	OllamaNumCtx int
 
 	// AIDescriptionBackfillInterval controls how often the background worker
 	// scans for items without an AI description and generates them.
@@ -41,6 +45,7 @@ func Load() (*Config, error) {
 		WhisperPort:    getenv("WHISPER_PORT", "50053"),
 		OllamaURL:      getenv("OLLAMA_URL", ""),
 		OllamaModel:    getenv("OLLAMA_MODEL", "llava"),
+		OllamaNumCtx:   atoiDefault(getenv("OLLAMA_NUM_CTX", "16384"), 16384),
 
 		AIDescriptionBackfillInterval: getenv("AI_DESCRIPTION_BACKFILL_INTERVAL", "5m"),
 		AIDescriptionBackfillBatch:    atoiDefault(getenv("AI_DESCRIPTION_BACKFILL_BATCH", "5"), 5),

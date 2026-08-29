@@ -21,15 +21,21 @@ const (
 type Ollama struct {
 	baseURL string
 	model   string
+	numCtx  int
 	http    *http.Client
 }
 
 var _ Provider = (*Ollama)(nil)
 
-func NewOllama(baseURL, model string) *Ollama {
+// NewOllama creates a provider for a local Ollama instance. numCtx sets the
+// model context window (in tokens) sent via options.num_ctx; pass 0 to use
+// Ollama's default. It must be large enough to hold the prompt plus all the
+// base64 images, otherwise Ollama returns a 400 exceed_context_size error.
+func NewOllama(baseURL, model string, numCtx int) *Ollama {
 	return &Ollama{
 		baseURL: baseURL,
 		model:   model,
+		numCtx:  numCtx,
 		http:    &http.Client{},
 	}
 }
@@ -49,12 +55,17 @@ func (c *Ollama) Describe(ctx context.Context, frames [][]byte) (string, error) 
 		prompt = videoPrompt
 	}
 
-	body, err := json.Marshal(map[string]any{
+	reqBody := map[string]any{
 		"model":  c.model,
 		"prompt": prompt,
 		"images": images,
 		"stream": false,
-	})
+	}
+	if c.numCtx > 0 {
+		reqBody["options"] = map[string]any{"num_ctx": c.numCtx}
+	}
+
+	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", err
 	}

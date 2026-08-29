@@ -70,8 +70,8 @@ func main() {
 
 	var vp vision.Provider
 	if cfg.OllamaURL != "" {
-		vp = vision.NewOllama(cfg.OllamaURL, cfg.OllamaModel)
-		slog.Info("vision provider enabled", "url", cfg.OllamaURL, "model", cfg.OllamaModel)
+		vp = vision.NewOllama(cfg.OllamaURL, cfg.OllamaModel, cfg.OllamaNumCtx)
+		slog.Info("vision provider enabled", "url", cfg.OllamaURL, "model", cfg.OllamaModel, "num_ctx", cfg.OllamaNumCtx)
 		probeOllama(cfg.OllamaURL)
 	}
 

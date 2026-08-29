@@ -40,7 +40,7 @@ func TestOllamaDescribeAgainstAPIContract(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewOllama(srv.URL, "qwen2.5vl:3b")
+	c := NewOllama(srv.URL, "qwen2.5vl:3b", 0)
 	got, err := c.Describe(context.Background(), [][]byte{[]byte("fake-frame-1"), []byte("fake-frame-2")})
 	if err != nil {
 		t.Fatalf("describe: %v", err)
