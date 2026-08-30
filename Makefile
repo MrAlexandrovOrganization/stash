@@ -20,25 +20,29 @@ install:
 .PHONY: proto
 proto:
 	@echo "Syncing proto from $(WHISPER_PROTO_SRC)..."
-	@mkdir -p proto gen/whisper
+	@mkdir -p proto/whisper gen/whisper
 	@if echo "$(WHISPER_PROTO_SRC)" | grep -qE "^https?://"; then \
-		curl -sSfL "$(WHISPER_PROTO_SRC)" -o proto/whisper.proto; \
+		curl -sSfL "$(WHISPER_PROTO_SRC)" -o proto/whisper/whisper.proto; \
 	else \
-		cp "$(WHISPER_PROTO_SRC)" proto/whisper.proto; \
+		cp "$(WHISPER_PROTO_SRC)" proto/whisper/whisper.proto; \
 	fi
-	sed -i '' 's|option go_package = ".*";|option go_package = "stash/gen/whisper";|' proto/whisper.proto
+	sed -i '' 's|option go_package = ".*";|option go_package = "stash/gen/whisper";|' proto/whisper/whisper.proto
 	buf generate
+
+# Regenerate Go stubs from the committed protos (no sync).
+# whisper -> gen/whisper (buf); embed -> gen/embed (protoc, scoped).
+# Requires: buf, protoc, protoc-gen-go, protoc-gen-go-grpc  →  make install
+.PHONY: generate
+generate:
+	mkdir -p gen/whisper gen/embed
+	buf generate
+	protoc --proto_path=proto/embed --go_out=gen/embed --go_opt=paths=source_relative \
+		--go-grpc_out=gen/embed --go-grpc_opt=paths=source_relative,require_unimplemented_servers=false \
+		proto/embed/embed.proto
 
 .PHONY: proto-lint
 proto-lint:
 	buf lint proto
-
-# Regenerate Go stubs from the committed proto (no sync).
-# Requires: buf, protoc-gen-go, protoc-gen-go-grpc  →  make install
-.PHONY: generate
-generate:
-	mkdir -p gen/whisper
-	buf generate
 
 .PHONY: format
 format:

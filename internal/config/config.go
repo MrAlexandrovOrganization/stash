@@ -25,12 +25,27 @@ type Config struct {
 	// which is too small for multi-frame/video requests).
 	OllamaNumCtx int
 
+	// OllamaEmbedModel is the Ollama text-embedding model used for the textual
+	// embedding of item descriptions (e.g. "bge-m3"). Empty disables text
+	// embeddings.
+	OllamaEmbedModel string
+	// ClipEmbedderAddr is the host:port of the external clip-embedder gRPC
+	// microservice (open_clip). Empty disables image embeddings.
+	ClipEmbedderAddr string
+
 	// AIDescriptionBackfillInterval controls how often the background worker
 	// scans for items without an AI description and generates them.
 	// Accepts a Go duration string (e.g. "5m"). Empty disables the worker.
 	AIDescriptionBackfillInterval string
 	// AIDescriptionBackfillBatch is how many items are processed per scan.
 	AIDescriptionBackfillBatch int
+
+	// EmbeddingBackfillInterval controls how often the background worker scans
+	// for items missing an embedding and fills them. Accepts a Go duration
+	// string (e.g. "5m"). Empty leaves the in-code default (5m).
+	EmbeddingBackfillInterval string
+	// EmbeddingBackfillBatch is how many missing items are processed per scan.
+	EmbeddingBackfillBatch int
 }
 
 func Load() (*Config, error) {
@@ -47,8 +62,14 @@ func Load() (*Config, error) {
 		OllamaModel:    getenv("OLLAMA_MODEL", "llava"),
 		OllamaNumCtx:   atoiDefault(getenv("OLLAMA_NUM_CTX", "16384"), 16384),
 
+		OllamaEmbedModel: getenv("OLLAMA_EMBED_MODEL", "bge-m3"),
+		ClipEmbedderAddr: getenv("CLIP_EMBEDDER_ADDR", ""),
+
 		AIDescriptionBackfillInterval: getenv("AI_DESCRIPTION_BACKFILL_INTERVAL", "5m"),
 		AIDescriptionBackfillBatch:    atoiDefault(getenv("AI_DESCRIPTION_BACKFILL_BATCH", "5"), 5),
+
+		EmbeddingBackfillInterval: getenv("EMBEDDING_BACKFILL_INTERVAL", ""),
+		EmbeddingBackfillBatch:    atoiDefault(getenv("EMBEDDING_BACKFILL_BATCH", "5"), 5),
 	}
 
 	if cfg.MinioAccessKey == "" {

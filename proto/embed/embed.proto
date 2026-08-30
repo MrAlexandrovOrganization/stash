@@ -1,0 +1,27 @@
+syntax = "proto3";
+package embed;
+
+option go_package = "stash/gen/embed";
+
+// Embedder produces vector embeddings for images and text using a single
+// shared multimodal space (CLIP/open_clip). The stash backend calls this
+// service over gRPC; the reference implementation lives in the separate
+// clip-embedder repository. External callers decide what to embed.
+service EmbedderService {
+  rpc EmbedImage(EmbedImageRequest) returns (EmbedResponse);
+  rpc EmbedText(EmbedTextRequest) returns (EmbedResponse);
+}
+
+message EmbedImageRequest {
+  bytes image = 1; // raw image bytes (jpeg/png/...)
+}
+
+message EmbedTextRequest {
+  string text = 1;
+}
+
+message EmbedResponse {
+  repeated float vector = 1; // embedding vector (dimension = dim)
+  int32 dim = 2; // vector dimension
+  string model = 3; // model name that produced the vector
+}

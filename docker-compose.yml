@@ -14,8 +14,15 @@ services:
       # the vision provider. Override here only if Ollama lives elsewhere.
       OLLAMA_URL: "http://ollama:11434"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5vl:3b}"
+      # Text-embedding model for descriptions. Must match an exact Ollama tag
+      # (Ollama 0.30.5 rejects a bare `bge-m3` when the pull is tagged bge-m3:567m).
+      OLLAMA_EMBED_MODEL: "${OLLAMA_EMBED_MODEL:-bge-m3:567m}"
       AI_DESCRIPTION_BACKFILL_INTERVAL: "${AI_DESCRIPTION_BACKFILL_INTERVAL:-5m}"
       AI_DESCRIPTION_BACKFILL_BATCH: "${AI_DESCRIPTION_BACKFILL_BATCH:-5}"
+      EMBEDDING_BACKFILL_INTERVAL: "${EMBEDDING_BACKFILL_INTERVAL:-5m}"
+      EMBEDDING_BACKFILL_BATCH: "${EMBEDDING_BACKFILL_BATCH:-5}"
+      # Embedding microservice (gRPC). Leave empty to disable image embeddings.
+      CLIP_EMBEDDER_ADDR: "${CLIP_EMBEDDER_ADDR:-clip-embedder:50051}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -25,6 +32,7 @@ services:
       - minio-net
       - whisper-net
       - ollama-net
+      - clip-net
     deploy:
       resources:
         limits:
@@ -32,7 +40,7 @@ services:
           cpus: "0.5"
 
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_USER: stash
@@ -67,6 +75,10 @@ networks:
   ollama-net:
     external: true
     name: ollama-net
+  # Created by the clip-embedder repo's own docker-compose; stash joins it.
+  clip-net:
+    external: true
+    name: clip-net
 
 volumes:
   postgres-data:

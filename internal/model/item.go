@@ -39,6 +39,38 @@ type SearchQuery struct {
 	Offset int
 }
 
+// SimilarRequest is the input to a hybrid similarity search. At least one of
+// Text, ItemID or ImageBytes should be set. The service turns each into one or
+// more embedding vectors and ranks items by the weighted sum of cosine
+// similarities.
+type SimilarRequest struct {
+	Text        string  // natural-language query
+	ItemID      string  // find items visually similar to this existing item
+	ImageBytes  []byte  // find items visually similar to an uploaded image
+	TextWeight  float64 // weight for the text-space similarity term
+	ImageWeight float64 // weight for the image-space similarity term
+	Limit       int
+	Offset      int
+}
+
+// SimilarQuery carries precomputed embedding vectors to the repository layer.
+type SimilarQuery struct {
+	TextVector  []float32
+	ImageVector []float32
+	TextWeight  float64
+	ImageWeight float64
+	Limit       int
+	Offset      int
+}
+
+// EmbeddingKind selects which embedding column to read.
+type EmbeddingKind string
+
+const (
+	EmbeddingKindText  EmbeddingKind = "text"
+	EmbeddingKindImage EmbeddingKind = "image"
+)
+
 type UploadMeta struct {
 	Type            MediaType
 	FileName        string

@@ -33,6 +33,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /items/{id}", h.deleteItem)
 	mux.HandleFunc("PATCH /items/{id}", h.updateItem)
 	mux.HandleFunc("POST /items/{id}/describe", h.describeItem)
+	mux.HandleFunc("GET /similar", h.similar)
+	mux.HandleFunc("POST /similar", h.similar)
 }
 
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +181,80 @@ func (h *Handler) updateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+// similar handles hybrid similarity search:
+//   - GET  /similar?q=<text>&item=<id>&limit=&tw=&iw=  (text and/or similar-to-item)
+//   - POST /similar (multipart, field "image")          (similar-to-uploaded-image)
+func (h *Handler) similar(w http.ResponseWriter, r *http.Request) {
+	req := model.SimilarRequest{}
+	switch r.Method {
+	case http.MethodGet:
+		req.Text = r.URL.Query().Get("q")
+		req.ItemID = r.URL.Query().Get("item")
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				req.Limit = n
+			}
+		}
+		if v := r.URL.Query().Get("offset"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				req.Offset = n
+			}
+		}
+		if v := r.URL.Query().Get("tw"); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+				req.TextWeight = f
+			}
+		}
+		if v := r.URL.Query().Get("iw"); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+				req.ImageWeight = f
+			}
+		}
+	case http.MethodPost:
+		if err := r.ParseMultipartForm(50 << 20); err != nil {
+			writeErr(w, http.StatusBadRequest, "parse form: "+err.Error())
+			return
+		}
+		f, _, err := r.FormFile("image")
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "image field required")
+			return
+		}
+		defer f.Close()
+		data, err := io.ReadAll(f)
+		if err != nil {
+			slog.Error("similar: read image", "error", err)
+			writeErr(w, http.StatusInternalServerError, "read image failed")
+			return
+		}
+		req.ImageBytes = data
+		if v := r.FormValue("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				req.Limit = n
+			}
+		}
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if req.Text == "" && req.ItemID == "" && len(req.ImageBytes) == 0 {
+		writeErr(w, http.StatusBadRequest, "provide q, item or image")
+		return
+	}
+
+	items, err := h.svc.Similar(r.Context(), req)
+	if err != nil {
+		slog.Error("similar", "error", err)
+		writeErr(w, http.StatusInternalServerError, "similar search failed")
+		return
+	}
+	if items == nil {
+		items = []*model.Item{}
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 // describeItem triggers on-demand AI description generation for one item.

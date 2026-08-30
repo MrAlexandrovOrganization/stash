@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pgvector/pgvector-go"
 	"stash/internal/model"
 )
 
@@ -321,6 +322,112 @@ func (r *postgres) GetByFileUniqueID(ctx context.Context, fileUniqueID string) (
 
 type scanner interface {
 	Scan(dest ...any) error
+}
+
+// --- embedding storage ---
+
+func (r *postgres) SetTextEmbedding(ctx context.Context, id string, vec []float32) error {
+	_, err := r.db.Exec(ctx,
+		"UPDATE items SET embedding_text = $1, updated_at = $2 WHERE id = $3",
+		pgvector.NewVector(vec), time.Now(), id)
+	return err
+}
+
+func (r *postgres) SetImageEmbedding(ctx context.Context, id string, vec []float32) error {
+	_, err := r.db.Exec(ctx,
+		"UPDATE items SET embedding_image = $1, updated_at = $2 WHERE id = $3",
+		pgvector.NewVector(vec), time.Now(), id)
+	return err
+}
+
+func (r *postgres) GetEmbedding(ctx context.Context, id string, kind model.EmbeddingKind) ([]float32, error) {
+	col := "embedding_text"
+	if kind == model.EmbeddingKindImage {
+		col = "embedding_image"
+	}
+	var v pgvector.Vector
+	if err := r.db.QueryRow(ctx, fmt.Sprintf("SELECT %s FROM items WHERE id = $1", col), id).Scan(&v); err != nil {
+		return nil, err
+	}
+	return v.Slice(), nil
+}
+
+// PendingEmbeddings returns describable items (image/gif/video) that are still
+// missing at least one embedding vector, newest first.
+func (r *postgres) PendingEmbeddings(ctx context.Context, limit int) ([]*model.Item, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT `+itemColumns+`
+		FROM items
+		WHERE type IN ('image', 'gif', 'video')
+		  AND (embedding_text IS NULL OR embedding_image IS NULL)
+		ORDER BY created_at DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*model.Item
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// Similar ranks items by the weighted sum of cosine similarities to the query
+// vectors, using pgvector's <=> (cosine distance) operator.
+func (r *postgres) Similar(ctx context.Context, q model.SimilarQuery) ([]*model.Item, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+
+	var terms []string
+	var args []any
+	i := 1
+	if len(q.TextVector) > 0 {
+		terms = append(terms, fmt.Sprintf("($%d * (1 - (embedding_text <=> $%d)))", i, i+1))
+		args = append(args, q.TextWeight, pgvector.NewVector(q.TextVector))
+		i += 2
+	}
+	if len(q.ImageVector) > 0 {
+		terms = append(terms, fmt.Sprintf("($%d * (1 - (embedding_image <=> $%d)))", i, i+1))
+		args = append(args, q.ImageWeight, pgvector.NewVector(q.ImageVector))
+		i += 2
+	}
+	if len(terms) == 0 {
+		return nil, fmt.Errorf("similar: no embedding vector provided")
+	}
+
+	args = append(args, limit, q.Offset)
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM items
+		ORDER BY %s DESC
+		LIMIT $%d OFFSET $%d`, itemColumns, strings.Join(terms, " + "), i, i+1)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*model.Item
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func scanItem(row scanner) (*model.Item, error) {

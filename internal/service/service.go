@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"stash/internal/embed"
 	"stash/internal/filestore"
 	"stash/internal/model"
 	"stash/internal/repository"
@@ -27,6 +28,8 @@ type Service interface {
 	Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error)
 	Update(ctx context.Context, id string, meta model.UpdateMeta) (*model.Item, error)
 	Describe(ctx context.Context, id string) (*model.Item, error)
+	// Similar runs a hybrid embedding-based search (text and/or image).
+	Similar(ctx context.Context, req model.SimilarRequest) ([]*model.Item, error)
 }
 
 // ErrNotDescribable is returned when AI description is requested for a media
@@ -37,14 +40,19 @@ var ErrNotDescribable = errors.New("media type is not describable")
 var ErrVisionDisabled = errors.New("vision provider is not configured")
 
 type svc struct {
-	repo      repository.Repository
-	files     filestore.FileStore
-	whisper   *whisper.Client
-	vision    vision.Provider
-	pollDelay time.Duration
+	repo          repository.Repository
+	files         filestore.FileStore
+	whisper       *whisper.Client
+	vision        vision.Provider
+	textEmbedder  embed.Embedder
+	imageEmbedder embed.Embedder
+	pollDelay     time.Duration
 
 	aiBackfillInterval time.Duration
 	aiBackfillBatch    int
+
+	embedBackfillInterval time.Duration
+	embedBackfillBatch    int
 }
 
 func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Client, vp vision.Provider, opts ...Option) Service {
@@ -71,6 +79,17 @@ func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Clie
 		go s.aiBackfillPoller(s.aiBackfillInterval)
 		slog.Info("ai description backfill enabled", "interval", s.aiBackfillInterval, "batch", s.aiBackfillBatch)
 	}
+
+	if s.textEmbedder != nil || s.imageEmbedder != nil {
+		if s.embedBackfillInterval <= 0 {
+			s.embedBackfillInterval = 5 * time.Minute
+		}
+		if s.embedBackfillBatch <= 0 {
+			s.embedBackfillBatch = 5
+		}
+		go s.embeddingBackfillPoller(s.embedBackfillInterval)
+		slog.Info("embedding backfill enabled", "interval", s.embedBackfillInterval, "batch", s.embedBackfillBatch)
+	}
 	return s
 }
 
@@ -83,6 +102,30 @@ func WithAIBackfill(interval time.Duration, batch int) Option {
 	return func(s *svc) {
 		s.aiBackfillInterval = interval
 		s.aiBackfillBatch = batch
+	}
+}
+
+// WithTextEmbedder injects the provider used to embed item descriptions.
+func WithTextEmbedder(e embed.Embedder) Option {
+	return func(s *svc) {
+		s.textEmbedder = e
+	}
+}
+
+// WithImageEmbedder injects the provider used to embed image bytes (the
+// external clip-embedder microservice).
+func WithImageEmbedder(e embed.Embedder) Option {
+	return func(s *svc) {
+		s.imageEmbedder = e
+	}
+}
+
+// WithEmbeddingBackfill enables the periodic worker that fills missing
+// embedding vectors. interval is a parsed Go duration; batch is items per scan.
+func WithEmbeddingBackfill(interval time.Duration, batch int) Option {
+	return func(s *svc) {
+		s.embedBackfillInterval = interval
+		s.embedBackfillBatch = batch
 	}
 }
 
@@ -177,6 +220,14 @@ func (s *svc) processUploadedMedia(id, path string, meta model.UploadMeta) {
 	}
 	if describableType(meta.Type) && s.vision != nil {
 		go s.runAIDescription(id, path, meta.ContentType)
+	}
+	if describableType(meta.Type) {
+		if s.imageEmbedder != nil {
+			go s.embedImage(context.Background(), id, path, meta.ContentType)
+		}
+		if s.textEmbedder != nil {
+			go s.embedText(context.Background(), id)
+		}
 	}
 }
 
@@ -410,6 +461,13 @@ func (s *svc) runAIDescription(itemID, path, contentType string) {
 	} else {
 		slog.Info("ai description done", "item", itemID)
 	}
+
+	// Now that we have a description, (re)compute embeddings: the text vector
+	// gains the AI description, and the image vector is refreshed if it was not
+	// embedded at upload time.
+	if s.textEmbedder != nil || s.imageEmbedder != nil {
+		go s.embedItem(context.Background(), itemID, path, contentType)
+	}
 }
 
 // aiBackfillPoller periodically generates missing AI descriptions so that
@@ -436,6 +494,195 @@ func (s *svc) backfillPendingAIDescriptions() {
 	for _, item := range items {
 		s.runAIDescription(item.ID, item.StoragePath, item.ContentType)
 	}
+}
+
+// --- embeddings ---
+
+// defaultSimilarLimit bounds an unbounded similarity search.
+const defaultSimilarLimit = 1000
+
+// embedText computes the text embedding of an item's descriptions and stores
+// it. It is safe to call concurrently.
+func (s *svc) embedText(ctx context.Context, id string) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	item, err := s.repo.Get(ctx, id)
+	if err != nil {
+		slog.Error("embed text: get item", "item", id, "error", err)
+		return
+	}
+	text := buildEmbedText(item)
+	if text == "" {
+		return
+	}
+	vec, err := s.textEmbedder.EmbedText(ctx, text)
+	if err != nil {
+		slog.Error("embed text: embed", "item", id, "error", err)
+		return
+	}
+	if err := s.repo.SetTextEmbedding(ctx, id, vec); err != nil {
+		slog.Error("embed text: save", "item", id, "error", err)
+	}
+}
+
+// embedImage fetches the stored file (or a representative frame for video/gif)
+// and stores its image embedding.
+func (s *svc) embedImage(ctx context.Context, id, path, contentType string) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	rc, err := s.files.Get(ctx, path)
+	if err != nil {
+		slog.Error("embed image: get file", "item", id, "error", err)
+		return
+	}
+	defer rc.Close()
+
+	data, err := s.representativeImage(ctx, rc, contentType)
+	if err != nil {
+		slog.Error("embed image: read image", "item", id, "error", err)
+		return
+	}
+	vec, err := s.imageEmbedder.EmbedImage(ctx, data)
+	if err != nil {
+		slog.Error("embed image: embed", "item", id, "error", err)
+		return
+	}
+	if err := s.repo.SetImageEmbedding(ctx, id, vec); err != nil {
+		slog.Error("embed image: save", "item", id, "error", err)
+	}
+}
+
+// embedItem computes and stores both vectors for an item. Used by the backfill
+// worker and after description generation.
+func (s *svc) embedItem(ctx context.Context, id, path, contentType string) {
+	if s.textEmbedder != nil {
+		s.embedText(ctx, id)
+	}
+	if s.imageEmbedder != nil {
+		s.embedImage(ctx, id, path, contentType)
+	}
+}
+
+// representativeImage returns a single image (bytes) to embed: the whole file
+// for images, or a middle frame for video/gif.
+func (s *svc) representativeImage(ctx context.Context, rc io.Reader, contentType string) ([]byte, error) {
+	if describableContentType(contentType) == "image" {
+		return io.ReadAll(rc)
+	}
+	frames, err := extractFrames(ctx, rc)
+	if err != nil {
+		return nil, err
+	}
+	if len(frames) == 0 {
+		return nil, fmt.Errorf("no frames extracted")
+	}
+	return frames[len(frames)/2], nil
+}
+
+// buildEmbedText joins the available textual descriptions of an item into a
+// single string for embedding.
+func buildEmbedText(item *model.Item) string {
+	var parts []string
+	if item.Description != "" {
+		parts = append(parts, item.Description)
+	}
+	if item.OriginalCaption != "" {
+		parts = append(parts, item.OriginalCaption)
+	}
+	if item.AIDescription != nil && *item.AIDescription != "" {
+		parts = append(parts, *item.AIDescription)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (s *svc) embeddingBackfillPoller(interval time.Duration) {
+	for range time.Tick(interval) {
+		s.backfillPendingEmbeddings()
+	}
+}
+
+func (s *svc) backfillPendingEmbeddings() {
+	ctx := context.Background()
+	items, err := s.repo.PendingEmbeddings(ctx, s.embedBackfillBatch)
+	if err != nil {
+		slog.Error("embedding backfill: list", "error", err)
+		return
+	}
+	if len(items) == 0 {
+		return
+	}
+	slog.Info("embedding backfill: processing", "count", len(items))
+	for _, item := range items {
+		s.embedItem(context.Background(), item.ID, item.StoragePath, item.ContentType)
+	}
+}
+
+// Similar turns the request into one or more embedding vectors and ranks items
+// by the weighted cosine similarity.
+func (s *svc) Similar(ctx context.Context, req model.SimilarRequest) ([]*model.Item, error) {
+	q := model.SimilarQuery{Limit: req.Limit, Offset: req.Offset}
+	if q.Limit <= 0 {
+		q.Limit = defaultSimilarLimit
+	}
+
+	if req.Text != "" {
+		if s.textEmbedder != nil {
+			tv, err := s.textEmbedder.EmbedText(ctx, req.Text)
+			if err != nil {
+				return nil, fmt.Errorf("embed text query: %w", err)
+			}
+			q.TextVector = tv
+			q.TextWeight = req.TextWeight
+		}
+		if s.imageEmbedder != nil {
+			iv, err := s.imageEmbedder.EmbedText(ctx, req.Text)
+			if err != nil {
+				return nil, fmt.Errorf("embed text query (image space): %w", err)
+			}
+			q.ImageVector = iv
+			q.ImageWeight = req.ImageWeight
+		}
+	}
+
+	if req.ItemID != "" {
+		if s.imageEmbedder == nil {
+			return nil, fmt.Errorf("image embeddings are disabled")
+		}
+		iv, err := s.repo.GetEmbedding(ctx, req.ItemID, model.EmbeddingKindImage)
+		if err != nil {
+			return nil, fmt.Errorf("get item embedding: %w", err)
+		}
+		q.ImageVector = iv
+		if q.ImageWeight == 0 {
+			q.ImageWeight = 1
+		}
+	}
+
+	if len(req.ImageBytes) > 0 {
+		if s.imageEmbedder == nil {
+			return nil, fmt.Errorf("image embeddings are disabled")
+		}
+		iv, err := s.imageEmbedder.EmbedImage(ctx, req.ImageBytes)
+		if err != nil {
+			return nil, fmt.Errorf("embed image query: %w", err)
+		}
+		q.ImageVector = iv
+		if q.ImageWeight == 0 {
+			q.ImageWeight = 1
+		}
+	}
+
+	if q.TextWeight == 0 && q.ImageWeight == 0 {
+		q.TextWeight, q.ImageWeight = 1, 1
+	} else if q.TextWeight == 0 {
+		q.TextWeight = 1
+	} else if q.ImageWeight == 0 {
+		q.ImageWeight = 1
+	}
+
+	return s.repo.Similar(ctx, q)
 }
 
 // describableContentType classifies a content type for the vision pipeline:
