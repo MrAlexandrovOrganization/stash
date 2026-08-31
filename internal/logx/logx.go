@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 const masked = "***"
@@ -44,10 +46,52 @@ func New(opts Options) *slog.Logger {
 	// Handler.WithAttrs on the wrapper would delegate to the inner handler
 	// and records would bypass masking.
 	if opts.Service != "" {
-		h = h.WithAttrs([]slog.Attr{slog.String("service", opts.Service)})
+		h = h.WithAttrs([]slog.Attr{
+			slog.String("service", opts.Service),
+			slog.String("service.name", opts.Service),
+		})
 	}
 	h = NewRedactHandler(h, opts.Secrets...)
+	h = NewTraceHandler(h)
+	h = NewOTelSeverityHandler(h)
 	return slog.New(h)
+}
+
+type OTelSeverityHandler struct{ slog.Handler }
+
+func NewOTelSeverityHandler(h slog.Handler) slog.Handler {
+	return &OTelSeverityHandler{Handler: h}
+}
+
+func (h *OTelSeverityHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &OTelSeverityHandler{Handler: h.Handler.WithAttrs(attrs)}
+}
+
+func (h *OTelSeverityHandler) WithGroup(name string) slog.Handler {
+	return &OTelSeverityHandler{Handler: h.Handler.WithGroup(name)}
+}
+
+func (h *OTelSeverityHandler) Handle(ctx context.Context, r slog.Record) error {
+	r.AddAttrs(
+		slog.Time("timestamp", r.Time),
+		slog.String("severity_text", r.Level.String()),
+		slog.String("body", r.Message),
+		slog.Int("severity_number", otelSeverityNumber(r.Level)),
+	)
+	return h.Handler.Handle(ctx, r)
+}
+
+func otelSeverityNumber(level slog.Level) int {
+	switch {
+	case level >= slog.LevelError:
+		return 17
+	case level >= slog.LevelWarn:
+		return 13
+	case level >= slog.LevelInfo:
+		return 9
+	default:
+		return 5
+	}
 }
 
 // Setup builds the standard logger for service and installs it as the
@@ -96,6 +140,14 @@ func NewRedactHandler(h slog.Handler, secrets ...string) slog.Handler {
 	return &RedactHandler{Handler: h, secrets: filtered}
 }
 
+func (h *RedactHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &RedactHandler{Handler: h.Handler.WithAttrs(attrs), secrets: h.secrets}
+}
+
+func (h *RedactHandler) WithGroup(name string) slog.Handler {
+	return &RedactHandler{Handler: h.Handler.WithGroup(name), secrets: h.secrets}
+}
+
 func (h *RedactHandler) Handle(ctx context.Context, r slog.Record) error {
 	redacted := slog.NewRecord(r.Time, r.Level, mask(r.Message, h.secrets), r.PC)
 	r.Attrs(func(a slog.Attr) bool {
@@ -114,7 +166,9 @@ func (h *RedactHandler) redactAttr(a slog.Attr) slog.Attr {
 		a.Value = slog.GroupValue(children...)
 		return a
 	}
-	a.Value = slog.StringValue(mask(a.Value.String(), h.secrets))
+	if a.Value.Kind() == slog.KindString {
+		a.Value = slog.StringValue(mask(a.Value.String(), h.secrets))
+	}
 	return a
 }
 
@@ -123,4 +177,35 @@ func mask(s string, secrets []string) string {
 		s = strings.ReplaceAll(s, sec, masked)
 	}
 	return s
+}
+
+// TraceHandler adds the active OpenTelemetry span context to each record.
+type TraceHandler struct {
+	slog.Handler
+}
+
+// NewTraceHandler wraps h and adds trace_id, span_id, and trace_flags when the
+// context contains a valid span context.
+func NewTraceHandler(h slog.Handler) slog.Handler {
+	return &TraceHandler{Handler: h}
+}
+
+func (h *TraceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &TraceHandler{Handler: h.Handler.WithAttrs(attrs)}
+}
+
+func (h *TraceHandler) WithGroup(name string) slog.Handler {
+	return &TraceHandler{Handler: h.Handler.WithGroup(name)}
+}
+
+func (h *TraceHandler) Handle(ctx context.Context, r slog.Record) error {
+	sc := trace.SpanContextFromContext(ctx)
+	if sc.IsValid() {
+		r.AddAttrs(
+			slog.String("trace_id", sc.TraceID().String()),
+			slog.String("span_id", sc.SpanID().String()),
+			slog.String("trace_flags", sc.TraceFlags().String()),
+		)
+	}
+	return h.Handler.Handle(ctx, r)
 }

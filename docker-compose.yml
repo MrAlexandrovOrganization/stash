@@ -23,6 +23,8 @@ services:
       EMBEDDING_BACKFILL_BATCH: "${EMBEDDING_BACKFILL_BATCH:-5}"
       # Embedding microservice (gRPC). Leave empty to disable image embeddings.
       CLIP_EMBEDDER_ADDR: "${CLIP_EMBEDDER_ADDR:-clip-embedder:50051}"
+      OTEL_SERVICE_NAME: "stash"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -33,6 +35,7 @@ services:
       - whisper-net
       - ollama-net
       - clip-net
+      - jaeger-net
     deploy:
       resources:
         limits:
@@ -79,6 +82,9 @@ networks:
   clip-net:
     external: true
     name: clip-net
+  jaeger-net:
+    external: true
+    name: jaeger-net
 
 volumes:
   postgres-data:

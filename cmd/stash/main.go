@@ -13,6 +13,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	pgvectorpgx "github.com/pgvector/pgvector-go/pgx"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/semconv/v1.30.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -32,6 +39,19 @@ import (
 )
 
 func main() {
+	tracerProvider, err := initTracing(context.Background())
+	if err != nil {
+		slog.Error("tracing", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracerProvider.Shutdown(ctx); err != nil {
+			slog.Error("tracing shutdown", "error", err)
+		}
+	}()
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("config", "error", err)
@@ -147,10 +167,67 @@ func main() {
 	h.Register(mux)
 
 	slog.Info("starting", "addr", cfg.Addr)
-	if err := http.ListenAndServe(cfg.Addr, mux); err != nil {
+	server := otelhttp.NewHandler(accessLog(mux), "stash")
+	if err := http.ListenAndServe(cfg.Addr, server); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
+	exporter, err := otlptracehttp.New(ctx)
+	if err != nil {
+		return nil, err
+	}
+	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName("stash")))
+	if err != nil {
+		return nil, err
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res))
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+	return provider, nil
+}
+
+type accessLogResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *accessLogResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *accessLogResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += n
+	return n, err
+}
+
+func accessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		ww := &accessLogResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(ww, r)
+		if ww.status == 0 {
+			ww.status = http.StatusOK
+		}
+		slog.InfoContext(r.Context(), "http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", ww.status,
+			"bytes", ww.bytes,
+			"duration_ms", time.Since(started).Milliseconds(),
+		)
+	})
 }
 
 // probeOllama logs model availability at startup so a missing/unreachable
