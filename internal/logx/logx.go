@@ -41,13 +41,22 @@ func New(opts Options) *slog.Logger {
 	if w == nil {
 		w = os.Stdout
 	}
-	var h slog.Handler = slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})
+	var h slog.Handler = slog.NewJSONHandler(w, &slog.HandlerOptions{
+		Level: level,
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			switch a.Key {
+			case slog.TimeKey, slog.LevelKey, slog.MessageKey, "service":
+				return slog.Attr{}
+			default:
+				return a
+			}
+		},
+	})
 	// Service attr must be attached BEFORE the redact wrapper:
 	// Handler.WithAttrs on the wrapper would delegate to the inner handler
 	// and records would bypass masking.
 	if opts.Service != "" {
 		h = h.WithAttrs([]slog.Attr{
-			slog.String("service", opts.Service),
 			slog.String("service.name", opts.Service),
 		})
 	}

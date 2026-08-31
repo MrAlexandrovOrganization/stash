@@ -60,9 +60,14 @@ func TestRecordShape(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
 		t.Fatalf("bad json: %v", err)
 	}
-	for _, key := range []string{"time", "level", "msg", "service"} {
+	for _, key := range []string{"timestamp", "severity_text", "severity_number", "body", "service.name"} {
 		if _, ok := rec[key]; !ok {
-			t.Errorf("missing standard field %q in %v", key, rec)
+			t.Errorf("missing OTel field %q in %v", key, rec)
+		}
+	}
+	for _, key := range []string{"time", "level", "msg", "service"} {
+		if _, ok := rec[key]; ok {
+			t.Errorf("legacy field %q present in %v", key, rec)
 		}
 	}
 	for _, key := range []string{"trace_id", "span_id", "trace_flags"} {
@@ -70,7 +75,7 @@ func TestRecordShape(t *testing.T) {
 			t.Errorf("trace field %q present without a span: %v", key, rec)
 		}
 	}
-	if rec["level"] != "INFO" || rec["service"] != "test-svc" {
+	if rec["severity_text"] != "INFO" || rec["service.name"] != "test-svc" || rec["body"] != "hello" {
 		t.Errorf("unexpected record: %v", rec)
 	}
 }
@@ -82,7 +87,7 @@ func TestLevelFiltering(t *testing.T) {
 		t.Errorf("info must be filtered at warn level: %s", buf.String())
 	}
 	l.Warn("kept")
-	if !strings.Contains(buf.String(), `"msg":"kept"`) {
+	if !strings.Contains(buf.String(), `"body":"kept"`) {
 		t.Errorf("warn must pass: %s", buf.String())
 	}
 }
