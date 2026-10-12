@@ -23,7 +23,7 @@ type Client struct {
 
 // NewClient dials the clip-embedder service at addr (host:port).
 func NewClient(addr string) (*Client, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(16*1024*1024)))
 	if err != nil {
 		return nil, fmt.Errorf("clip embedder: grpc dial %q: %w", addr, err)
 	}
@@ -40,6 +40,9 @@ func (c *Client) EmbedText(ctx context.Context, text string) ([]float32, error) 
 	if err != nil {
 		return nil, wrapErr(err)
 	}
+	if resp.Model != "ViT-B/32" || resp.Pretrained != "laion2b_s34b_b79k" || resp.Dim != 512 || len(resp.Vector) != 512 {
+		return nil, fmt.Errorf("clip embedding space incompatible")
+	}
 	return resp.Vector, nil
 }
 
@@ -47,6 +50,9 @@ func (c *Client) EmbedImage(ctx context.Context, data []byte) ([]float32, error)
 	resp, err := c.stub.EmbedImage(ctx, &pb.EmbedImageRequest{Image: data})
 	if err != nil {
 		return nil, wrapErr(err)
+	}
+	if resp.Model != "ViT-B/32" || resp.Pretrained != "laion2b_s34b_b79k" || resp.Dim != 512 || len(resp.Vector) != 512 {
+		return nil, fmt.Errorf("clip embedding space incompatible")
 	}
 	return resp.Vector, nil
 }

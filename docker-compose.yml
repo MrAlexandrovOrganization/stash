@@ -1,8 +1,15 @@
 services:
   stash:
-    build: .
+    user: ${WORKER_UID:-1000}:${WORKER_GID:-1000}
+    build:
+      context: .
+      args:
+        GO_VERSION: ${GO_VERSION:?Run via make}
+        ALPINE_VERSION: ${ALPINE_VERSION:?Run via make}
     restart: unless-stopped
     environment:
+      WORKER_CREDENTIALS_FILE: /run/secrets/worker-credentials
+      PREFERRED_WORKER_IDS: ${PREFERRED_WORKER_IDS:-stash-mac-cpu,stash-wsl-cpu}
       ADDR: ":8080"
       POSTGRES_URL: "postgres://stash:stash@postgres:5432/stash?sslmode=disable"
       MINIO_ENDPOINT: "minio:9000"
@@ -25,11 +32,13 @@ services:
       CLIP_EMBEDDER_ADDR: "${CLIP_EMBEDDER_ADDR:-clip-embedder:50051}"
       OTEL_SERVICE_NAME: "stash"
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}"
+    secrets: [worker-credentials]
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - stash-net
+      - caddy-transcriber-net
       - stash-api-net
       - minio-net
       - whisper-net
@@ -42,8 +51,35 @@ services:
           memory: 512m
           cpus: "0.5"
 
+  stash-worker:
+    user: ${WORKER_UID:-1000}:${WORKER_GID:-1000}
+    build:
+      context: .
+      args:
+        GO_VERSION: ${GO_VERSION:?Run via make}
+        ALPINE_VERSION: ${ALPINE_VERSION:?Run via make}
+    entrypoint: [/app/stash-worker]
+    restart: unless-stopped
+    stop_grace_period: 45s
+    environment:
+      WORKER_ENDPOINT: stash:50058
+      WORKER_TRANSPORT: internal
+      WORKER_ID: stash-server-fallback
+      WORKER_TOKEN_FILE: /run/secrets/worker-token
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-bge-m3:567m}
+    secrets: [worker-token]
+    networks: [stash-net, ollama-net]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+    deploy:
+      resources:
+        limits: {memory: 256m, cpus: "0.5"}
+
   postgres:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:${PGVECTOR_VERSION:?Run via make}
     restart: unless-stopped
     environment:
       POSTGRES_USER: stash
@@ -65,7 +101,15 @@ services:
           memory: 512m
           cpus: "0.5"
 
+secrets:
+  worker-credentials:
+    file: ${WORKER_CREDENTIALS_PATH:?Set worker credentials registry path}
+  worker-token:
+    file: ${WORKER_TOKEN_PATH:?Set server fallback token path}
+
 networks:
+  caddy-transcriber-net:
+    external: true
   stash-net:
   stash-api-net:
     name: stash-api-net

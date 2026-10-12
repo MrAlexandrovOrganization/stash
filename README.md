@@ -1,0 +1,81 @@
+# stash distributed workers
+
+## Architecture
+
+Stash HTTP API and stash-bot keep their existing contracts. Vision descriptions
+and Ollama text embeddings now use Stash's PostgreSQL-backed queue. The item
+remains the durable source for submission/recovery: backfill retries missing
+results after process restarts. Requests are keyed by model/input; vision also
+includes the persisted item generation. Results remain available across RPC
+cancellation and are applied only to the current item generation. Manual
+Describe persists the pending intent before starting background preparation.
+Stale results cannot overwrite newer uploads or descriptions.
+
+CLIP image embeddings and text-to-image search use the separate clip-embedder
+queue. Its protobuf snapshot is committed under proto/embed; source is the
+clip-embedder repository's proto/embed.proto from the coordinated worker rollout.
+Ordinary builds generate the snapshot without reading a sibling checkout.
+
+Workers call a local Ollama via HTTP because it is Ollama's supported inference
+API; queue transport is gRPC. Models must match the coordinator: qwen2.5vl:3b
+and bge-m3:567m (1024 dimensions). The initial Mac/WSL deployment uses CPU Ollama
+in containers, with one concurrent inference and one loaded model. Mac Docker
+cannot use Metal. No native background process is required.
+
+PostgreSQL migration 008 is additive; startup preserves the established migration
+behavior, now with one transaction and advisory lock covering ledger updates.
+Existing descriptions/vectors are preserved. Source edits invalidate derived
+vectors; no bulk reindex is started. Back up the stash PostgreSQL database before
+rollout; the existing database backup must include the new queue tables.
+
+## Worker lifecycle and security
+
+Workers poll outbound gRPC/TLS via Caddy every five seconds. Readiness is reported
+every 20 seconds, expires after 90 seconds, and is scoped to a token's worker ID.
+Claimed tasks use random lease IDs, renew every 20 seconds, and become claimable
+again after expiry. Completion validates owner/instance/lease and rejects stale
+results. Failed attempts back off, with at most five attempts. Queued jobs have
+no TTL; terminal results are retained for 30 days since last access.
+
+Mac/WSL ready workers suppress the server fallback, including while busy. The
+fallback takes jobs only when all configured preferred worker IDs are unavailable
+with the required models. Models must be present before a worker reports ready.
+The server stores SHA-256 token hashes in a protected credential registry;
+workers mount their own raw tokens as read-only secrets. Never commit real .env,
+tokens or registry files. WORKER_UID/WORKER_GID must match the owner of token
+files so non-root workers can read mode-600 secrets.
+
+Only WorkerService is public through Caddy. Consumer APIs/database/cache ports
+are private. The shared workers hostname routes distinct protobuf services;
+no SSH tunnels or public inbound ports on Mac/WSL are needed.
+
+## Running
+
+Copy the matching .env.server.example, .env.mac.example or .env.wsl.example to
+.env and fill machine paths/endpoint. The same make up/down/logs/restart/ps
+commands select the server or worker Compose stack. .env sets models, IDs,
+profiles, resource limits, tokens and autodeploy. make config-check validates it.
+
+For CPU Ollama, first start the stack with make up, then prepare its named model
+volume using make models. Until both models are present, the worker is not ready
+and the permanent server fallback continues accepting tasks. Model downloads
+run only through this explicit command, never during checks or hooks.
+
+## CI and autodeploy
+
+CI uses Make to check, build and publish immutable CPU (amd64/arm64)
+images to public GHCR packages. Only after the server deployment succeeds is the
+stable release marker promoted. WORKER_AUTODEPLOY=1 enables the container updater:
+it downloads the approved digest, drains a busy worker, starts the replacement,
+waits for Docker health, and rolls back on startup failure. Offline devices catch
+up after returning. Machine .env and token mounts are preserved. The updater has
+Docker socket access and manages only explicitly labelled workers in its own
+Compose project. Its bootstrap source is vendored from transcriber's approved
+updater at cd4dcb2393fdc159f76cb98570f99b724edc2384, adapted for these images.
+
+make install installs pinned tools/dependencies; make format applies formatting;
+make check is read-only analysis and existing Go tests. Models, inference, production queues and Telegram
+are not used by ordinary checks. make versions shows tool/image pins. Version
+sources are versions.mk, go.mod or pyproject.toml/uv.lock. Standalone worker
+health reflects readiness reports; docker logs includes structured lifecycle,
+attempt outcome and duration without media, descriptions or bearer credentials.

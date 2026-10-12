@@ -22,7 +22,7 @@ func NewPostgres(db *pgxpool.Pool) Repository {
 
 const itemColumns = `id, type, file_name, content_type, size, storage_path, description, tags,
 	source, original_caption, transcript, ai_description, ai_description_error,
-	transcript_job_id, telegram_file_id, file_unique_id, created_at, updated_at`
+	transcript_job_id, telegram_file_id, file_unique_id, created_at, updated_at, processing_generation`
 
 func (r *postgres) Save(ctx context.Context, item *model.Item) error {
 	_, err := r.db.Exec(ctx, `
@@ -440,7 +440,7 @@ func scanItem(row scanner) (*model.Item, error) {
 		&item.Transcript, &item.AIDescription, &item.AIDescriptionError,
 		&item.TranscriptJobID, &item.TelegramFileID,
 		&item.FileUniqueID,
-		&item.CreatedAt, &item.UpdatedAt,
+		&item.CreatedAt, &item.UpdatedAt, &item.ProcessingGeneration,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {

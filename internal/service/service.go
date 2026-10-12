@@ -15,6 +15,7 @@ import (
 	"stash/internal/embed"
 	"stash/internal/filestore"
 	"stash/internal/model"
+	"stash/internal/processing"
 	"stash/internal/repository"
 	"stash/internal/vision"
 	"stash/internal/whisper"
@@ -387,7 +388,7 @@ func (s *svc) Describe(ctx context.Context, id string) (*model.Item, error) {
 	if !describableType(item.Type) {
 		return nil, ErrNotDescribable
 	}
-	if err := s.repo.ClearAIDescriptionError(ctx, id); err != nil {
+	if err := s.repo.RequestDescription(ctx, id); err != nil {
 		return nil, fmt.Errorf("clear ai description error: %w", err)
 	}
 	item.AIDescriptionError = nil
@@ -401,8 +402,16 @@ func (s *svc) Describe(ctx context.Context, id string) (*model.Item, error) {
 // persists the result. It is synchronous; callers decide on concurrency
 // (a goroutine on upload, a sequential loop in the backfill worker).
 func (s *svc) runAIDescription(itemID, path, contentType string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	s.describeWithContext(context.Background(), itemID, path, contentType)
+}
+func (s *svc) describeWithContext(base context.Context, itemID, path, contentType string) {
+	ctx, cancel := context.WithTimeout(base, 10*time.Minute)
 	defer cancel()
+	item, err := s.repo.Get(ctx, itemID)
+	if err != nil || item.StoragePath != path {
+		return
+	}
+	ctx = processing.RequestIdentity(ctx, fmt.Sprintf("stash:vision:%s:%d", itemID, item.ProcessingGeneration))
 
 	rc, err := s.files.Get(ctx, path)
 	if err != nil {
@@ -426,7 +435,7 @@ func (s *svc) runAIDescription(itemID, path, contentType string) {
 		frames, err = extractFrames(ctx, rc)
 		if err != nil {
 			slog.Error("ai description: extract frames", "item", itemID, "error", err)
-			_ = s.repo.SetAIDescriptionError(ctx, itemID, "extract frames: "+err.Error())
+			_ = s.repo.SetAIDescriptionErrorAt(ctx, itemID, "frame extraction failed", item.ProcessingGeneration)
 			return
 		}
 	}
@@ -437,7 +446,7 @@ func (s *svc) runAIDescription(itemID, path, contentType string) {
 	slog.Info("ai description: frame bytes", "item", itemID, "frames", len(frames), "bytes", total)
 	if total == 0 {
 		slog.Warn("ai description: empty image bytes, marking failed", "item", itemID)
-		_ = s.repo.SetAIDescriptionError(ctx, itemID, "empty image bytes from storage")
+		_ = s.repo.SetAIDescriptionErrorAt(ctx, itemID, "empty image bytes from storage", item.ProcessingGeneration)
 		return
 	}
 
@@ -446,7 +455,10 @@ func (s *svc) runAIDescription(itemID, path, contentType string) {
 		slog.Error("ai description: describe", "item", itemID, "error", err)
 		// Permanent-looking failure (e.g. Ollama 400 "failed to decode image
 		// bytes"): record it so the backfill stops retrying this item forever.
-		_ = s.repo.SetAIDescriptionError(ctx, itemID, err.Error())
+		var terminal processing.TerminalError
+		if errors.As(err, &terminal) {
+			_ = s.repo.SetAIDescriptionErrorAt(ctx, itemID, terminal.Error(), item.ProcessingGeneration)
+		}
 		return
 	}
 	if strings.TrimSpace(desc) == "" {
@@ -456,7 +468,7 @@ func (s *svc) runAIDescription(itemID, path, contentType string) {
 		return
 	}
 
-	if err := s.repo.SetAIDescription(ctx, itemID, desc); err != nil {
+	if err := s.repo.SetAIDescriptionAt(ctx, itemID, desc, item.ProcessingGeneration); err != nil {
 		slog.Error("ai description: save", "item", itemID, "error", err)
 	} else {
 		slog.Info("ai description done", "item", itemID)
@@ -521,7 +533,7 @@ func (s *svc) embedText(ctx context.Context, id string) {
 		slog.Error("embed text: embed", "item", id, "error", err)
 		return
 	}
-	if err := s.repo.SetTextEmbedding(ctx, id, vec); err != nil {
+	if err := s.repo.SetTextEmbeddingAt(ctx, id, vec, item.ProcessingGeneration); err != nil {
 		slog.Error("embed text: save", "item", id, "error", err)
 	}
 }
@@ -531,6 +543,11 @@ func (s *svc) embedText(ctx context.Context, id string) {
 func (s *svc) embedImage(ctx context.Context, id, path, contentType string) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+
+	item, err := s.repo.Get(ctx, id)
+	if err != nil || item.StoragePath != path {
+		return
+	}
 
 	rc, err := s.files.Get(ctx, path)
 	if err != nil {
@@ -549,7 +566,7 @@ func (s *svc) embedImage(ctx context.Context, id, path, contentType string) {
 		slog.Error("embed image: embed", "item", id, "error", err)
 		return
 	}
-	if err := s.repo.SetImageEmbedding(ctx, id, vec); err != nil {
+	if err := s.repo.SetImageEmbeddingAt(ctx, id, vec, item.ProcessingGeneration); err != nil {
 		slog.Error("embed image: save", "item", id, "error", err)
 	}
 }

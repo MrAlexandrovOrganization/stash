@@ -6,6 +6,11 @@ import (
 )
 
 type Repository interface {
+	RequestDescription(ctx context.Context, id string) error
+	SetAIDescriptionAt(ctx context.Context, id, description string, generation int64) error
+	SetAIDescriptionErrorAt(ctx context.Context, id, message string, generation int64) error
+	SetTextEmbeddingAt(ctx context.Context, id string, vec []float32, generation int64) error
+	SetImageEmbeddingAt(ctx context.Context, id string, vec []float32, generation int64) error
 	Save(ctx context.Context, item *model.Item) error
 	Get(ctx context.Context, id string) (*model.Item, error)
 	Delete(ctx context.Context, id string) error

@@ -1,0 +1,55 @@
+syntax = "proto3";
+package stash.processing.v1;
+
+option go_package = "stash/gen/processing";
+service WorkerService {
+  rpc Report(ReportRequest) returns (WorkerReply);
+  rpc Claim(ClaimRequest) returns (ClaimResponse);
+  rpc Heartbeat(LeaseRequest) returns (WorkerReply);
+  rpc Complete(CompleteRequest) returns (WorkerReply);
+  rpc Fail(FailRequest) returns (WorkerReply);
+}
+message ReportRequest {
+  string worker_id = 1;
+  string instance_id = 2;
+  bool ready = 3;
+  string vision_model = 4;
+  string text_model = 5;
+}
+message WorkerReply {
+  bool accepted = 1;
+}
+message ClaimRequest {
+  string worker_id = 1;
+  string instance_id = 2;
+}
+message LeaseRequest {
+  string worker_id = 1;
+  string instance_id = 2;
+  string job_id = 3;
+  string lease_id = 4;
+}
+message Task {
+  string kind = 1;
+  string model = 2;
+  repeated bytes frames = 3;
+  string text = 4;
+  int32 num_ctx = 5;
+}
+message Result {
+  string description = 1;
+  repeated float vector = 2;
+  string model = 3;
+}
+message ClaimResponse {
+  LeaseRequest lease = 1;
+  Task task = 2;
+}
+message CompleteRequest {
+  LeaseRequest lease = 1;
+  Result result = 2;
+}
+message FailRequest {
+  LeaseRequest lease = 1;
+  bool permanent = 2;
+}

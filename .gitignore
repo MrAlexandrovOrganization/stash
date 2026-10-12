@@ -1,2 +1,6 @@
 .env
 gen/*
+
+.env*
+!.env.*.example
+.worker-release*

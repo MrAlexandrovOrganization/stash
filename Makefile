@@ -1,4 +1,23 @@
 DOCKER_COMPOSE = docker compose
+include versions.mk
+-include .worker-release.env
+export WORKER_CPU_IMAGE WORKER_GPU_IMAGE
+ENV_FILE ?= .env
+STACK_ROLE ?= server
+ifneq (,$(wildcard $(ENV_FILE)))
+include $(ENV_FILE)
+export
+endif
+ifeq ($(STACK_ROLE),workers)
+COMPOSE_FILE := compose.workers.yml
+ifeq ($(WORKER_AUTODEPLOY),1)
+COMPOSE_FILE := compose.workers.yml:compose.autoupdate.yml
+endif
+else
+COMPOSE_FILE := docker-compose.yml
+endif
+export COMPOSE_FILE
+DOCKER_COMPOSE += --env-file $(ENV_FILE)
 BINARY = stash
 
 # Canonical source of whisper.proto.
@@ -11,9 +30,9 @@ WHISPER_PROTO_SRC ?= ../transcriber/proto/whisper.proto
 #   macOS: brew install bufbuild/buf/buf
 .PHONY: install
 install:
-	go install github.com/bufbuild/buf/cmd/buf@v1.67.0
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1
+	go install github.com/bufbuild/buf/cmd/buf@v$(BUF_VERSION)
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v$(PROTOC_GEN_GO_GRPC_VERSION)
 
 # Sync proto from the canonical source (backends/transcriber) and regenerate Go stubs.
 # Requires: buf, protoc-gen-go, protoc-gen-go-grpc  →  make install
@@ -34,11 +53,7 @@ proto:
 # Requires: buf, protoc, protoc-gen-go, protoc-gen-go-grpc  →  make install
 .PHONY: generate
 generate:
-	mkdir -p gen/whisper gen/embed
 	buf generate
-	protoc --proto_path=proto/embed --go_out=gen/embed --go_opt=paths=source_relative \
-		--go-grpc_out=gen/embed --go-grpc_opt=paths=source_relative,require_unimplemented_servers=false \
-		proto/embed/embed.proto
 
 .PHONY: proto-lint
 proto-lint:
@@ -46,18 +61,27 @@ proto-lint:
 
 .PHONY: format
 format:
-	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+	gofmt -w cmd internal
+	buf format -w proto
 
 .PHONY: build
 build:
 	go build -o $(BINARY) ./cmd/stash
+	go build -o stash-worker ./cmd/stash-worker
 
 # The backend stack owns ONLY the "stash" service (postgres starts as its
 # dependency). It must never start the bot — that lives in the stash-bot repo.
 # Targeting "stash" explicitly prevents accidentally bringing up other services.
 .PHONY: up
 up:
-	$(DOCKER_COMPOSE) up -d --build stash
+ifeq ($(STACK_ROLE):$(WORKER_AUTODEPLOY),workers:1)
+	$(MAKE) worker-release
+	$(MAKE) up-selected
+else
+	$(MAKE) up-selected
+endif
+up-selected:
+	$(DOCKER_COMPOSE) up -d --build
 
 .PHONY: down
 down:
@@ -65,7 +89,7 @@ down:
 
 .PHONY: logs
 logs:
-	$(DOCKER_COMPOSE) logs -f stash
+	$(DOCKER_COMPOSE) logs -f
 
 .PHONY: deploy
 deploy:
@@ -73,7 +97,7 @@ deploy:
 
 .PHONY: restart
 restart:
-	$(DOCKER_COMPOSE) restart stash
+	$(DOCKER_COMPOSE) restart
 
 .PHONY: test
 test:
@@ -86,3 +110,37 @@ vet:
 .PHONY: clean
 clean:
 	rm -f $(BINARY)
+
+.PHONY: ps config-check compose-build check versions
+ps:
+	$(DOCKER_COMPOSE) ps -a
+config-check:
+	$(DOCKER_COMPOSE) config --quiet
+compose-build:
+	$(DOCKER_COMPOSE) build
+check: generate
+	@test -z "$$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
+	buf format --diff --exit-code proto
+	buf lint proto
+	go vet ./...
+	go test ./...
+versions:
+	@$(foreach v,$(VERSION_VARS),printf '%s=%s\n' '$(v)' '$($(v))';)
+build test vet: generate
+
+WORKER_REGISTRY := ghcr.io/mralexandrovorganization/stash
+SOURCE_REVISION ?= $(shell git rev-parse HEAD)
+export WORKER_REGISTRY SOURCE_REVISION
+.PHONY: worker-release publish-workers promote-workers up-selected
+worker-release:
+	python3 scripts/worker_release.py resolve
+publish-workers:
+	python3 scripts/worker_release.py publish --arch $(PUBLISH_ARCH)
+promote-workers:
+	python3 scripts/worker_release.py promote
+
+.PHONY: models
+models:
+	@test '$(STACK_ROLE)' = workers
+	$(DOCKER_COMPOSE) exec ollama ollama pull '$(OLLAMA_MODEL)'
+	$(DOCKER_COMPOSE) exec ollama ollama pull '$(OLLAMA_EMBED_MODEL)'

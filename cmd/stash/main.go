@@ -25,12 +25,13 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 
 	"stash/internal/config"
+	"stash/internal/embed"
 	clipembed "stash/internal/embed/clip"
-	ollamaembed "stash/internal/embed/ollama"
 	"stash/internal/filestore"
 	"stash/internal/handler"
 	"stash/internal/logx"
 	"stash/internal/migrate"
+	"stash/internal/processing"
 	"stash/internal/repository"
 	"stash/internal/service"
 	"stash/internal/vision"
@@ -117,16 +118,28 @@ func main() {
 		slog.Info("whisper connected", "host", cfg.WhisperHost, "port", cfg.WhisperPort)
 	}
 
+	q := &processing.Queue{DB: db, VisionModel: cfg.OllamaModel, TextModel: cfg.OllamaEmbedModel, NumCtx: cfg.OllamaNumCtx, Preferred: strings.Split(os.Getenv("PREFERRED_WORKER_IDS"), ",")}
+	api, err := processing.NewAPI(q, os.Getenv("WORKER_CREDENTIALS_FILE"))
+	if err != nil {
+		slog.Error("worker api configuration", "error", err)
+		os.Exit(1)
+	}
+	workerServer, err := api.Serve("[::]:50058")
+	if err != nil {
+		slog.Error("worker api startup", "error", err)
+		os.Exit(1)
+	}
+	defer workerServer.Stop()
 	var vp vision.Provider
 	if cfg.OllamaURL != "" {
-		vp = vision.NewOllama(cfg.OllamaURL, cfg.OllamaModel, cfg.OllamaNumCtx)
+		vp = &processing.Vision{Queue: q}
 		slog.Info("vision provider enabled", "url", cfg.OllamaURL, "model", cfg.OllamaModel, "num_ctx", cfg.OllamaNumCtx)
-		probeOllama(cfg.OllamaURL)
+
 	}
 
-	var te *ollamaembed.Client
+	var te embed.Embedder
 	if cfg.OllamaURL != "" && cfg.OllamaEmbedModel != "" {
-		te = ollamaembed.NewClient(cfg.OllamaURL, cfg.OllamaEmbedModel)
+		te = &processing.Text{Queue: q}
 		slog.Info("text embedder enabled", "model", cfg.OllamaEmbedModel)
 	}
 
