@@ -8,6 +8,7 @@ service WorkerService {
   rpc Heartbeat(LeaseRequest) returns (WorkerReply);
   rpc Complete(CompleteRequest) returns (WorkerReply);
   rpc Fail(FailRequest) returns (WorkerReply);
+  rpc DownloadMedia(LeaseRequest) returns (stream MediaChunk);
 }
 message ReportRequest {
   string worker_id = 1;
@@ -15,6 +16,7 @@ message ReportRequest {
   bool ready = 3;
   string vision_model = 4;
   string text_model = 5;
+  bool supports_media = 6;
 }
 message WorkerReply {
   bool accepted = 1;
@@ -35,11 +37,17 @@ message Task {
   repeated bytes frames = 3;
   string text = 4;
   int32 num_ctx = 5;
+  string media_path = 6;
+  string content_type = 7;
+}
+message MediaChunk {
+  bytes data = 1;
 }
 message Result {
   string description = 1;
   repeated float vector = 2;
   string model = 3;
+  repeated bytes frames = 4;
 }
 message ClaimResponse {
   LeaseRequest lease = 1;

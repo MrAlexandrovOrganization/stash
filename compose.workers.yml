@@ -26,7 +26,7 @@ services:
       options: {max-size: 10m, max-file: "3"}
     deploy:
       resources:
-        limits: {memory: 256m, cpus: "0.5"}
+        limits: {memory: "${WORKER_MEMORY_LIMIT:-512m}", cpus: "${WORKER_CPU_LIMIT:-0.5}"}
   ollama:
     image: ollama/ollama:${OLLAMA_VERSION:?Run via make}
     restart: unless-stopped

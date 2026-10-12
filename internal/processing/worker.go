@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
@@ -125,10 +126,12 @@ func RunWorker(ctx context.Context, c WorkerConfig) error {
 		defer ticker.Stop()
 		for {
 			check, cancel := context.WithTimeout(base, 10*time.Second)
-			ready := modelsReady(check, c) && !draining.Load()
+			_, ffmpegErr := exec.LookPath("ffmpeg")
+			_, ffprobeErr := exec.LookPath("ffprobe")
+			ready := modelsReady(check, c) && ffmpegErr == nil && ffprobeErr == nil && !draining.Load()
 			cancel()
 			report, cancel := context.WithTimeout(base, 10*time.Second)
-			_, err := client.Report(report, &pb.ReportRequest{WorkerId: c.ID, InstanceId: instance, Ready: ready, VisionModel: c.VisionModel, TextModel: c.TextModel})
+			_, err := client.Report(report, &pb.ReportRequest{WorkerId: c.ID, InstanceId: instance, Ready: ready, VisionModel: c.VisionModel, TextModel: c.TextModel, SupportsMedia: true})
 			cancel()
 			if err != nil {
 				os.Remove("/tmp/worker-ready")
@@ -150,7 +153,7 @@ func RunWorker(ctx context.Context, c WorkerConfig) error {
 		withdraw, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		withdraw = metadata.AppendToOutgoingContext(withdraw, "authorization", "Bearer "+token)
-		client.Report(withdraw, &pb.ReportRequest{WorkerId: c.ID, InstanceId: instance, Ready: false, VisionModel: c.VisionModel, TextModel: c.TextModel})
+		client.Report(withdraw, &pb.ReportRequest{WorkerId: c.ID, InstanceId: instance, Ready: false, VisionModel: c.VisionModel, TextModel: c.TextModel, SupportsMedia: true})
 	}()
 	slog.Info("worker started", "worker_id", c.ID, "vision_model", c.VisionModel, "text_model", c.TextModel)
 	for ctx.Err() == nil {
@@ -221,7 +224,19 @@ func process(parent, base context.Context, client pb.WorkerServiceClient, c Work
 			err = errors.New("incompatible model")
 			break
 		}
-		result.Description, err = vision.NewOllama(c.OllamaURL, c.VisionModel, int(job.Task.NumCtx)).Describe(ctx, job.Task.Frames)
+		frames := job.Task.Frames
+		if job.Task.MediaPath != "" {
+			frames, err = prepareMedia(ctx, base, client, job)
+		}
+		if err == nil {
+			result.Description, err = vision.NewOllama(c.OllamaURL, c.VisionModel, int(job.Task.NumCtx)).Describe(ctx, frames)
+		}
+	case "frames":
+		if job.Task.Model != "frames-v1" {
+			err = errors.New("incompatible media protocol")
+			break
+		}
+		result.Frames, err = prepareMedia(ctx, base, client, job)
 	case "text":
 		if job.Task.Model != c.TextModel {
 			err = errors.New("incompatible model")
@@ -231,7 +246,7 @@ func process(parent, base context.Context, client pb.WorkerServiceClient, c Work
 	default:
 		err = errors.New("unsupported task kind")
 	}
-	if err != nil || strings.TrimSpace(result.Description) == "" && len(result.Vector) == 0 {
+	if err != nil || strings.TrimSpace(result.Description) == "" && len(result.Vector) == 0 && len(result.Frames) == 0 {
 		failure, stop := context.WithTimeout(base, 10*time.Second)
 		defer stop()
 		client.Fail(failure, &pb.FailRequest{Lease: job.Lease, Permanent: false})

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"github.com/pgvector/pgvector-go"
+	"stash/internal/model"
 )
 
 //go:embed sql/*.sql
@@ -44,4 +45,14 @@ func (r *postgres) SetTextEmbeddingAt(ctx context.Context, id string, vec []floa
 }
 func (r *postgres) SetImageEmbeddingAt(ctx context.Context, id string, vec []float32, generation int64) error {
 	return r.writeProcessing(ctx, "set_image_at", id, pgvector.NewVector(vec), generation)
+}
+
+func (r *postgres) HasEmbedding(ctx context.Context, id string, kind model.EmbeddingKind) (bool, error) {
+	name := "has_text_embedding"
+	if kind == model.EmbeddingKindImage {
+		name = "has_image_embedding"
+	}
+	var exists bool
+	err := r.db.QueryRow(ctx, processingSQL(name), id).Scan(&exists)
+	return exists, err
 }

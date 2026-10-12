@@ -31,6 +31,8 @@ type Repository interface {
 	// Embedding storage.
 	SetTextEmbedding(ctx context.Context, id string, vec []float32) error
 	SetImageEmbedding(ctx context.Context, id string, vec []float32) error
+	// HasEmbedding checks presence without decoding a nullable vector.
+	HasEmbedding(ctx context.Context, id string, kind model.EmbeddingKind) (bool, error)
 	// GetEmbedding returns the stored embedding vector of the given kind.
 	GetEmbedding(ctx context.Context, id string, kind model.EmbeddingKind) ([]float32, error)
 	// PendingEmbeddings returns describable items missing at least one vector.

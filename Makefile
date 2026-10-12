@@ -55,6 +55,15 @@ proto:
 generate:
 	buf generate
 
+.PHONY: proto-check
+PROTO_BREAKING_BASE ?= HEAD^
+proto-check:
+	buf build proto
+	buf format --diff --exit-code proto
+	buf lint proto
+	git cat-file -e "$(PROTO_BREAKING_BASE)^{commit}"
+	buf breaking proto --against ".git#ref=$(PROTO_BREAKING_BASE),subdir=proto"
+
 .PHONY: proto-lint
 proto-lint:
 	buf lint proto
@@ -121,10 +130,8 @@ config-check:
 	$(DOCKER_COMPOSE) config --quiet
 compose-build:
 	$(DOCKER_COMPOSE) build
-check: generate
+check: generate proto-check
 	@test -z "$$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
-	buf format --diff --exit-code proto
-	buf lint proto
 	go vet ./...
 	go test ./...
 versions:

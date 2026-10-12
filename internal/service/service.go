@@ -47,7 +47,10 @@ type svc struct {
 	vision        vision.Provider
 	textEmbedder  embed.Embedder
 	imageEmbedder embed.Embedder
-	pollDelay     time.Duration
+	mediaPreparer interface {
+		PrepareMedia(context.Context, string, string) ([][]byte, error)
+	}
+	pollDelay time.Duration
 
 	aiBackfillInterval time.Duration
 	aiBackfillBatch    int
@@ -96,6 +99,13 @@ func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Clie
 
 // Option configures optional service behaviour.
 type Option func(*svc)
+
+// WithMediaPreparer delegates video/GIF decoding to the durable worker queue.
+func WithMediaPreparer(p interface {
+	PrepareMedia(context.Context, string, string) ([][]byte, error)
+}) Option {
+	return func(s *svc) { s.mediaPreparer = p }
+}
 
 // WithAIBackfill enables the periodic worker that generates missing AI
 // descriptions. interval is a parsed Go duration; batch is items per scan.
@@ -413,6 +423,13 @@ func (s *svc) describeWithContext(base context.Context, itemID, path, contentTyp
 	}
 	ctx = processing.RequestIdentity(ctx, fmt.Sprintf("stash:vision:%s:%d", itemID, item.ProcessingGeneration))
 
+	if provider, ok := s.vision.(interface {
+		DescribeMedia(context.Context, string, string) (string, error)
+	}); ok {
+		desc, err := provider.DescribeMedia(ctx, path, contentType)
+		s.saveDescription(ctx, item, desc, err)
+		return
+	}
 	rc, err := s.files.Get(ctx, path)
 	if err != nil {
 		slog.Error("ai description: get file", "item", itemID, "error", err)
@@ -451,6 +468,11 @@ func (s *svc) describeWithContext(base context.Context, itemID, path, contentTyp
 	}
 
 	desc, err := s.vision.Describe(ctx, frames)
+	s.saveDescription(ctx, item, desc, err)
+}
+
+func (s *svc) saveDescription(ctx context.Context, item *model.Item, desc string, err error) {
+	itemID := item.ID
 	if err != nil {
 		slog.Error("ai description: describe", "item", itemID, "error", err)
 		// Permanent-looking failure (e.g. Ollama 400 "failed to decode image
@@ -478,7 +500,7 @@ func (s *svc) describeWithContext(base context.Context, itemID, path, contentTyp
 	// gains the AI description, and the image vector is refreshed if it was not
 	// embedded at upload time.
 	if s.textEmbedder != nil || s.imageEmbedder != nil {
-		go s.embedItem(context.Background(), itemID, path, contentType)
+		go s.embedItem(context.Background(), itemID, item.StoragePath, item.ContentType)
 	}
 }
 
@@ -524,6 +546,14 @@ func (s *svc) embedText(ctx context.Context, id string) {
 		slog.Error("embed text: get item", "item", id, "error", err)
 		return
 	}
+	exists, err := s.repo.HasEmbedding(ctx, id, model.EmbeddingKindText)
+	if err != nil {
+		slog.Error("embed text: check stored vector", "item", id, "error", err)
+		return
+	}
+	if exists {
+		return
+	}
 	text := buildEmbedText(item)
 	if text == "" {
 		return
@@ -549,14 +579,35 @@ func (s *svc) embedImage(ctx context.Context, id, path, contentType string) {
 		return
 	}
 
-	rc, err := s.files.Get(ctx, path)
+	exists, err := s.repo.HasEmbedding(ctx, id, model.EmbeddingKindImage)
 	if err != nil {
-		slog.Error("embed image: get file", "item", id, "error", err)
+		slog.Error("embed image: check stored vector", "item", id, "error", err)
 		return
 	}
-	defer rc.Close()
-
-	data, err := s.representativeImage(ctx, rc, contentType)
+	if exists {
+		return
+	}
+	var data []byte
+	if s.mediaPreparer != nil && describableContentType(contentType) != "image" {
+		ctx = processing.RequestIdentity(ctx, fmt.Sprintf("stash:frames:%s:%d", id, item.ProcessingGeneration))
+		var frames [][]byte
+		frames, err = s.mediaPreparer.PrepareMedia(ctx, path, contentType)
+		if err == nil && len(frames) > 0 {
+			data = frames[len(frames)/2]
+		}
+		if err == nil && len(data) == 0 {
+			err = errors.New("empty prepared frames")
+		}
+	} else {
+		var rc io.ReadCloser
+		rc, err = s.files.Get(ctx, path)
+		if err != nil {
+			slog.Error("embed image: get file", "item", id, "error", err)
+			return
+		}
+		defer rc.Close()
+		data, err = s.representativeImage(ctx, rc, contentType)
+	}
 	if err != nil {
 		slog.Error("embed image: read image", "item", id, "error", err)
 		return

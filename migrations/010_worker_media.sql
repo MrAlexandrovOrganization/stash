@@ -1,0 +1,1 @@
+ALTER TABLE processing_workers ADD COLUMN supports_media BOOLEAN NOT NULL DEFAULT FALSE;

@@ -358,13 +358,7 @@ func (r *postgres) PendingEmbeddings(ctx context.Context, limit int) ([]*model.I
 	if limit <= 0 {
 		limit = 1
 	}
-	rows, err := r.db.Query(ctx, `
-		SELECT `+itemColumns+`
-		FROM items
-		WHERE type IN ('image', 'gif', 'video')
-		  AND (embedding_text IS NULL OR embedding_image IS NULL)
-		ORDER BY created_at DESC
-		LIMIT $1`, limit)
+	rows, err := r.db.Query(ctx, processingSQL("pending_embeddings"), limit)
 	if err != nil {
 		return nil, err
 	}

@@ -132,3 +132,21 @@ func (t *Text) EmbedText(ctx context.Context, text string) ([]float32, error) {
 func (t *Text) EmbedImage(context.Context, []byte) ([]float32, error) {
 	return nil, errors.New("text provider does not support images")
 }
+
+// Media prepares frames without exposing object-storage credentials to workers.
+type Media struct{ Queue *Queue }
+
+func (m *Media) PrepareMedia(ctx context.Context, path, contentType string) ([][]byte, error) {
+	result, err := m.Queue.wait(ctx, &pb.Task{Kind: "frames", Model: "frames-v1", MediaPath: path, ContentType: contentType})
+	if err != nil {
+		return nil, err
+	}
+	return result.Frames, nil
+}
+func (v *Vision) DescribeMedia(ctx context.Context, path, contentType string) (string, error) {
+	result, err := v.Queue.wait(ctx, &pb.Task{Kind: "vision", Model: v.Queue.VisionModel, MediaPath: path, ContentType: contentType, NumCtx: int32(v.Queue.NumCtx)})
+	if err != nil {
+		return "", err
+	}
+	return result.Description, nil
+}

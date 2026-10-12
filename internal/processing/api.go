@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -27,6 +28,9 @@ import (
 type API struct {
 	Queue  *Queue
 	Hashes map[string]string
+	Media  interface {
+		Get(context.Context, string) (io.ReadCloser, error)
+	}
 }
 
 var identityPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
@@ -79,7 +83,7 @@ func (a *API) Report(ctx context.Context, r *pb.ReportRequest) (*pb.WorkerReply,
 	if err := a.authorize(ctx, r.WorkerId, r.InstanceId); err != nil {
 		return nil, err
 	}
-	_, err := a.Queue.DB.Exec(ctx, sql("report"), r.WorkerId, r.InstanceId, r.Ready, r.VisionModel, r.TextModel)
+	_, err := a.Queue.DB.Exec(ctx, sql("report"), r.WorkerId, r.InstanceId, r.Ready, r.VisionModel, r.TextModel, r.SupportsMedia)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "worker report unavailable")
 	}
@@ -169,18 +173,6 @@ func (a *API) Complete(ctx context.Context, r *pb.CompleteRequest) (*pb.WorkerRe
 	if r.Result == nil || len(r.Result.Description) > 1024*1024 {
 		return nil, status.Error(codes.InvalidArgument, "invalid result")
 	}
-	if len(r.Result.Vector) > 0 {
-		if r.Result.Model != a.Queue.TextModel || len(r.Result.Vector) != 1024 {
-			return nil, status.Error(codes.InvalidArgument, "incompatible embedding")
-		}
-		for _, value := range r.Result.Vector {
-			if math.IsInf(float64(value), 0) || math.IsNaN(float64(value)) {
-				return nil, status.Error(codes.InvalidArgument, "invalid embedding")
-			}
-		}
-	} else if r.Result.Model != a.Queue.VisionModel || strings.TrimSpace(r.Result.Description) == "" {
-		return nil, status.Error(codes.InvalidArgument, "invalid vision result")
-	}
 	var payload []byte
 	var jobState string
 	err := a.Queue.DB.QueryRow(ctx, sql("owned"), r.Lease.JobId, r.Lease.WorkerId, r.Lease.InstanceId, r.Lease.LeaseId).Scan(&payload, &jobState)
@@ -190,11 +182,33 @@ func (a *API) Complete(ctx context.Context, r *pb.CompleteRequest) (*pb.WorkerRe
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "queue unavailable")
 	}
-	if jobState != "done" {
-		task := new(pb.Task)
-		if proto.Unmarshal(payload, task) != nil || task.Model != r.Result.Model || (task.Kind == "text" && len(r.Result.Vector) != 1024) || (task.Kind == "vision" && len(r.Result.Vector) != 0) {
-			return nil, status.Error(codes.InvalidArgument, "result task mismatch")
+	if jobState == "done" {
+		data, err := proto.Marshal(r.Result)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid result")
 		}
+		return a.change(ctx, r.Lease, "complete", data)
+	}
+	task := new(pb.Task)
+	if proto.Unmarshal(payload, task) != nil || task.Model != r.Result.Model {
+		return nil, status.Error(codes.InvalidArgument, "result task mismatch")
+	}
+	valid := false
+	switch task.Kind {
+	case "text":
+		valid = r.Result.Model == a.Queue.TextModel && len(r.Result.Vector) == 1024 && len(r.Result.Frames) == 0 && r.Result.Description == ""
+		for _, v := range r.Result.Vector {
+			if math.IsInf(float64(v), 0) || math.IsNaN(float64(v)) {
+				valid = false
+			}
+		}
+	case "vision":
+		valid = r.Result.Model == a.Queue.VisionModel && strings.TrimSpace(r.Result.Description) != "" && len(r.Result.Vector) == 0 && len(r.Result.Frames) == 0
+	case "frames":
+		valid = r.Result.Model == "frames-v1" && validFrames(r.Result.Frames) && len(r.Result.Vector) == 0 && r.Result.Description == ""
+	}
+	if !valid {
+		return nil, status.Error(codes.InvalidArgument, "invalid task result")
 	}
 	data, err := proto.Marshal(r.Result)
 	if err != nil {

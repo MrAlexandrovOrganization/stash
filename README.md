@@ -112,3 +112,41 @@ scripts/render_dashboards.py; `make monitoring-check` checks generated JSON and
 all panel PromQL expressions with pinned promtool. Grafana URL: /d/compute-workers.
 The dashboard's editable source belongs to Stash; CLIP owns its metrics contract
 and scrape target. CPU/GPU devices need no inbound monitoring ports.
+
+## Media preparation and embedding recovery
+
+Backfill selects missing image vectors, and missing text vectors only when the
+item has nonempty source text. Each embedding branch checks its stored vector
+before loading media or submitting inference. Metadata/description changes still
+invalidate text vectors through the existing generation trigger. Completed image
+vectors are retained until the source media changes.
+
+The server queues object references for vision and video/GIF frame preparation.
+Workers download inputs over lease-authenticated `DownloadMedia` gRPC/TLS;
+only the object referenced by an active lease is accessible. Workers receive no
+MinIO credentials, signed URLs or arbitrary object-read API. Downloads are streamed
+in 64 KiB chunks to temporary worker files, limited to 512 MiB and ten minutes.
+Lease checks recur during download; normal heartbeats continue during preparation.
+FFmpeg runs on the claiming worker, using the existing frame sampling and JPEG
+encoding, with a single decoder thread. Prepared frames are limited to 16 MiB in
+total, matching the existing task input bound. For CLIP the worker returns frames
+to Stash, which submits the middle frame to the separate CLIP inference queue.
+Queued object references and prepared results survive coordinator restarts.
+
+Migration 010 adds a media capability flag, default false for existing reports.
+The new coordinator accepts claims only from compatible media-capable instances;
+old workers wait without consuming unsupported jobs. CI publishes the images,
+deploys the coordinator, then promotes the approved release. Mac/WSL updaters
+replace workers automatically; the updated server fallback covers their absence.
+Existing queued text/frame-based vision tasks remain supported. Roll back code
+without dropping the additive column; restore the previous approved worker image
+if rolling back both sides.
+
+`WORKER_MEMORY_LIMIT` (default 512m) and `WORKER_CPU_LIMIT` (default 0.5 CPUs)
+control the worker process plus FFmpeg, independently of Ollama. Mac/WSL examples
+use two CPUs; existing .env files retain the default until explicitly tuned.
+
+`make proto-check` builds, formats without writes, lints and checks FILE-level
+protobuf compatibility against `PROTO_BREAKING_BASE` (default HEAD^). CI supplies
+the PR base or previous push SHA and fetches history; a missing base is an error.
+Generated Go files remain ignored and are regenerated from committed protos.

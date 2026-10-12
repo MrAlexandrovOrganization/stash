@@ -12,8 +12,12 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    env:
+      PROTO_BREAKING_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

@@ -124,6 +124,7 @@ func main() {
 		slog.Error("worker api configuration", "error", err)
 		os.Exit(1)
 	}
+	api.Media = fs
 	workerServer, err := api.Serve("[::]:50058")
 	if err != nil {
 		slog.Error("worker api startup", "error", err)
@@ -166,6 +167,7 @@ func main() {
 	}
 
 	var svcOpts []service.Option
+	svcOpts = append(svcOpts, service.WithMediaPreparer(&processing.Media{Queue: q}))
 	if vp != nil {
 		// Interval from env is optional; New() falls back to a 5m default.
 		if d, err := time.ParseDuration(cfg.AIDescriptionBackfillInterval); err == nil && d > 0 {
