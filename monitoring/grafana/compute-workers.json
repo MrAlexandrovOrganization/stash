@@ -38,7 +38,7 @@
         "refresh": 1,
         "multi": true,
         "includeAll": true,
-        "allValue": ".*",
+        "allValue": "stash|clip-embedder",
         "current": {
           "text": "All",
           "value": "$__all"
@@ -730,6 +730,7 @@
           "options": {
             "excludeByName": {
               "Time": true,
+              "__name__": true,
               "instance": true,
               "job": true
             },

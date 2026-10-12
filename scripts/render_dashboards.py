@@ -147,7 +147,7 @@ def dashboard():
     table=panels[8]
     table['targets'][0].update(format='table',instant=True,range=False)
     table['options']={"showHeader":True,"cellHeight":"sm"}
-    table['transformations']=[{"id":"organize","options":{"excludeByName":{"Time":True,"instance":True,"job":True},"renameByName":{"service":"Сервис","worker_id":"Воркер","worker_role":"Роль","Value":"Состояние"}}}]
+    table['transformations']=[{"id":"organize","options":{"excludeByName":{"Time":True,"__name__":True,"instance":True,"job":True},"renameByName":{"service":"Сервис","worker_id":"Воркер","worker_role":"Роль","Value":"Состояние"}}}]
     uptime=panels[9]
     uptime['targets'][0].update(instant=True,range=False)
     uptime['options']={"orientation":"horizontal","displayMode":"basic","showUnfilled":True,"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":False}}
@@ -159,7 +159,7 @@ def dashboard():
     for i,item in enumerate(panels,1):item['id']=i
     variables=[]
     for name,label,query in [('service','Сервис','label_values(compute_worker_online, service)'),('worker','Воркер','label_values(compute_worker_online{service=~"$service"}, worker_id)')]:
-        variables.append({"name":name,"label":label,"type":"query","datasource":DS,"definition":query,"query":{"query":query,"refId":name+"-variable"},"refresh":1,"multi":True,"includeAll":True,"allValue":".*","current":{"text":"All","value":"$__all"},"sort":1})
+        variables.append({"name":name,"label":label,"type":"query","datasource":DS,"definition":query,"query":{"query":query,"refId":name+"-variable"},"refresh":1,"multi":True,"includeAll":True,"allValue":"stash|clip-embedder" if name == "service" else ".*","current":{"text":"All","value":"$__all"},"sort":1})
     return {"uid":"compute-workers","title":"Stash и CLIP · воркеры и очереди","id":None,"version":1,"schemaVersion":41,"tags":["stash","clip","workers","queues"],"timezone":"browser","editable":False,"refresh":"15s","time":{"from":"now-6h","to":"now"},"annotations":{"list":[]},"templating":{"list":variables},"panels":panels,"links":[{"title":"Расшифровки · воркеры","url":"/d/transcriber-workers","type":"link","keepTime":True}]}
 
 def main():
