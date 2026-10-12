@@ -130,6 +130,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer workerServer.Stop()
+	metricsAddress := os.Getenv("METRICS_ADDRESS")
+	if metricsAddress == "" {
+		metricsAddress = "127.0.0.1:9109"
+	}
+	metricsServer, err := api.ServeMetrics(metricsAddress)
+	if err != nil {
+		slog.Error("metrics startup failed")
+		os.Exit(1)
+	}
+	defer metricsServer.Close()
 	var vp vision.Provider
 	if cfg.OllamaURL != "" {
 		vp = &processing.Vision{Queue: q}

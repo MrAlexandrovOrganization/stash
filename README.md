@@ -79,3 +79,36 @@ are not used by ordinary checks. make versions shows tool/image pins. Version
 sources are versions.mk, go.mod or pyproject.toml/uv.lock. Standalone worker
 health reflects readiness reports; docker logs includes structured lifecycle,
 attempt outcome and duration without media, descriptions or bearer credentials.
+
+## Monitoring
+
+The private Prometheus endpoint binds only its prometheus-net alias, with no
+published host port or Caddy route. Scrape failures return HTTP 503; stale values
+are never emitted as a successful scrape. The coordinator snapshots queue state
+and the latest compatible readiness reports, with explicit zero series for all
+credential-registry worker IDs. Metrics contain no media, text, task IDs, token
+values or instance UUID labels. Readiness has the same 90-second TTL as claiming.
+
+Completion, failure, retry and lease-expiration counters are stored transactionally
+with queue state and survive process restarts and terminal-job cleanup. Their
+history starts at this rollout; old results are not retroactively counted.
+P50/P95 duration gauges use successful jobs completed in the last 24 hours,
+measured from coordinator lease acquisition and enqueue time respectively.
+They include transport/model-loading time and are not device benchmarks.
+Legacy results without recorded timestamps do not contribute to durations.
+
+Startup runs the additive monitoring migration under the existing database lock;
+source items and queue payload/results are preserved. This is an explicit
+continuation of this project's startup-migration policy. Backups must include
+queue metadata and counters as well as stored results.
+
+`make monitoring-install` installs only this project's files into
+MONITORING_DATA_DIR (default ~/.monitoring). Server `make up` calls it automatically;
+worker stacks never change shared monitoring files. The existing Prometheus
+file discovery and Grafana file provisioning pick up changes without restarts.
+
+`make dashboards` renders the shared Stash/CLIP dashboard from
+scripts/render_dashboards.py; `make monitoring-check` checks generated JSON and
+all panel PromQL expressions with pinned promtool. Grafana URL: /d/compute-workers.
+The dashboard's editable source belongs to Stash; CLIP owns its metrics contract
+and scrape target. CPU/GPU devices need no inbound monitoring ports.

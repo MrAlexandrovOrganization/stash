@@ -82,6 +82,9 @@ else
 endif
 up-selected:
 	$(DOCKER_COMPOSE) up -d --build
+ifeq ($(STACK_ROLE),server)
+	$(MAKE) monitoring-install
+endif
 
 .PHONY: down
 down:
@@ -144,3 +147,14 @@ models:
 	@test '$(STACK_ROLE)' = workers
 	$(DOCKER_COMPOSE) exec ollama ollama pull '$(OLLAMA_MODEL)'
 	$(DOCKER_COMPOSE) exec ollama ollama pull '$(OLLAMA_EMBED_MODEL)'
+
+.PHONY: dashboards monitoring-check monitoring-install
+monitoring-install:
+	@test '$(STACK_ROLE)' = server
+	python3 scripts/install_monitoring.py
+dashboards:
+	python3 scripts/render_dashboards.py
+monitoring-check:
+	python3 scripts/render_dashboards.py --check
+	python3 scripts/render_dashboards.py --rules | docker run --rm -i --entrypoint promtool prom/prometheus:$(PROMETHEUS_CHECK_VERSION) check rules /dev/stdin
+check: monitoring-check

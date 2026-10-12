@@ -4,3 +4,7 @@ gen/*
 .env*
 !.env.*.example
 .worker-release*
+
+/stash
+/stash-worker
+__pycache__/

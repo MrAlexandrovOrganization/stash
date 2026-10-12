@@ -8,6 +8,7 @@ services:
         ALPINE_VERSION: ${ALPINE_VERSION:?Run via make}
     restart: unless-stopped
     environment:
+      METRICS_ADDRESS: stash-metrics:9109
       WORKER_CREDENTIALS_FILE: /run/secrets/worker-credentials
       PREFERRED_WORKER_IDS: ${PREFERRED_WORKER_IDS:-stash-mac-cpu,stash-wsl-cpu}
       ADDR: ":8080"
@@ -37,14 +38,16 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - stash-net
-      - caddy-transcriber-net
-      - stash-api-net
-      - minio-net
-      - whisper-net
-      - ollama-net
-      - clip-net
-      - jaeger-net
+      prometheus-net:
+        aliases: [stash-metrics]
+      stash-net: {}
+      caddy-transcriber-net: {}
+      stash-api-net: {}
+      minio-net: {}
+      whisper-net: {}
+      ollama-net: {}
+      clip-net: {}
+      jaeger-net: {}
     deploy:
       resources:
         limits:
@@ -108,6 +111,8 @@ secrets:
     file: ${WORKER_TOKEN_PATH:?Set server fallback token path}
 
 networks:
+  prometheus-net:
+    external: true
   caddy-transcriber-net:
     external: true
   stash-net:
