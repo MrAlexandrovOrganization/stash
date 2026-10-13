@@ -4,7 +4,8 @@ ARG ALPINE_VERSION
 FROM golang:${GO_VERSION}-alpine AS builder
 RUN apk add --no-cache make
 WORKDIR /app
-COPY go.mod go.sum Makefile versions.mk ./
+COPY go.mod go.sum Makefile ./
+COPY Makefiles ./Makefiles
 RUN go mod download && make install
 COPY . .
 RUN make generate && CGO_ENABLED=0 go build -o /out/stash ./cmd/stash && CGO_ENABLED=0 go build -o /out/stash-worker ./cmd/stash-worker

@@ -65,7 +65,9 @@ run only through this explicit command, never during checks or hooks.
 
 CI uses Make to check, build and publish immutable CPU (amd64/arm64)
 images to public GHCR packages. Only after the server deployment succeeds is the
-stable release marker promoted. WORKER_AUTODEPLOY=1 enables the container updater:
+stable release marker promoted. The server consumes the already published amd64
+CPU artifact by immutable digest with `make deploy-image`; it does not rebuild
+application code. `make server-image` resolves that artifact for the exact SHA. WORKER_AUTODEPLOY=1 enables the container updater:
 it downloads the approved digest, drains a busy worker, starts the replacement,
 waits for Docker health, and rolls back on startup failure. Offline devices catch
 up after returning. Machine .env and token mounts are preserved. The updater has
@@ -76,7 +78,7 @@ updater at cd4dcb2393fdc159f76cb98570f99b724edc2384, adapted for these images.
 make install installs pinned tools/dependencies; make format applies formatting;
 make check is read-only analysis and existing Go tests. Models, inference, production queues and Telegram
 are not used by ordinary checks. make versions shows tool/image pins. Version
-sources are versions.mk, go.mod or pyproject.toml/uv.lock. Standalone worker
+sources are Makefiles/versions.mk, go.mod or pyproject.toml/uv.lock. Standalone worker
 health reflects readiness reports; docker logs includes structured lifecycle,
 attempt outcome and duration without media, descriptions or bearer credentials.
 
@@ -150,3 +152,42 @@ use two CPUs; existing .env files retain the default until explicitly tuned.
 protobuf compatibility against `PROTO_BREAKING_BASE` (default HEAD^). CI supplies
 the PR base or previous push SHA and fetches history; a missing base is an error.
 Generated Go files remain ignored and are regenerated from committed protos.
+
+## Repository layout and local operation
+
+The root contains one Makefile. Version pins live in `Makefiles/versions.mk`.
+Compose configurations live in `compose/`:
+
+- `server.yml`: coordinator, persistent storage and server fallback.
+- `workers.yml`: device workers and their model cache/runtime.
+- `workers.autodeploy.yml`: optional approved-release updater.
+
+Use Make commands from the checkout root; Compose uses an explicit project
+directory so relative paths, project names and named volumes survive this move.
+Copy the appropriate machine example to `.env`; keep existing secrets and volumes
+when updating an existing machine. `make config-check-examples` validates all
+examples without reading production secrets. `make config-check` validates the
+selected role, profiles, TLS transport, worker identities and secret mounts.
+Remote workers use TLS and individual credentials. The server fallback's
+plaintext transport is restricted to its private Compose service endpoint.
+
+`make run` starts the coordinator in the foreground using exported configuration;
+Ctrl-C stops it. The coordinator requires the database/storage configuration and
+credential registry described in the server example. Prefer `make up` to run the
+complete stack; `make down` stops it without deleting named volumes. Model downloads
+and inference are excluded from ordinary checks.
+
+Committed protobuf snapshots are regenerated with `make generate`; ordinary
+builds never synchronize from a neighboring checkout. Refresh a consumer snapshot
+explicitly from its canonical repository and review compatibility before delivery.
+
+Successful CI deployment records its immutable image in ignored
+`.server-release.env`; subsequent Make commands retain it. The previous value is
+kept in `.server-release.previous.env`. For a manual rollback, first select the
+compatible Git revision, then pass its saved digest as `SERVER_IMAGE` to
+`make deploy-image`; database migrations/data are not rolled back automatically.
+Keep the pre-migration container images until the first successful rollout.
+
+CI actions use the Node.js 24 runtime. This concerns the actions themselves,
+not the application's Go/Python runtime. GitHub-hosted runners supply it;
+self-hosted runners must meet the selected actions' minimum runner version.

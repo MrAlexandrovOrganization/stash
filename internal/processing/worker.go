@@ -32,8 +32,11 @@ type WorkerConfig struct {
 }
 
 func (c WorkerConfig) validate() error {
-	if c.Endpoint == "" || !identityPattern.MatchString(c.ID) || c.OllamaURL == "" || c.VisionModel == "" || c.TextModel == "" {
+	if c.Endpoint == "" || c.TokenFile == "" || !identityPattern.MatchString(c.ID) || c.OllamaURL == "" || c.VisionModel == "" || c.TextModel == "" {
 		return errors.New("invalid worker configuration")
+	}
+	if c.Transport != "tls" && (c.Transport != "internal" || c.Endpoint != "stash:50058") {
+		return errors.New("invalid worker transport or private endpoint")
 	}
 	return nil
 }

@@ -8,3 +8,5 @@ gen/*
 /stash
 /stash-worker
 __pycache__/
+
+.server-release*

@@ -3,3 +3,9 @@
 .images
 gen
 .bin
+
+stash
+stash-worker
+.worker-release*
+
+.server-release*

@@ -1,6 +1,7 @@
 services:
   stash:
     user: ${WORKER_UID:-1000}:${WORKER_GID:-1000}
+    image: ${SERVER_IMAGE:-stash:local}
     build:
       context: .
       args:
@@ -56,6 +57,7 @@ services:
 
   stash-worker:
     user: ${WORKER_UID:-1000}:${WORKER_GID:-1000}
+    image: ${SERVER_IMAGE:-stash:local}
     build:
       context: .
       args:
