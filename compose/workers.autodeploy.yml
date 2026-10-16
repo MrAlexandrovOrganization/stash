@@ -1,10 +1,12 @@
 services:
   worker-cpu:
+    container_name: "${CONTAINER_NAME_PREFIX:-}stash-worker-cpu"
     labels:
       io.compute.autodeploy: "true"
       io.compute.worker-role: cpu
       io.compute.drain-protocol: "1"
   worker-updater:
+    container_name: "${CONTAINER_NAME_PREFIX:-}stash-worker-updater"
     build:
       context: .
       dockerfile: updater/Dockerfile

@@ -1,5 +1,6 @@
 services:
   worker-cpu:
+    container_name: "${CONTAINER_NAME_PREFIX:-}stash-worker-cpu"
     user: ${WORKER_UID:-1000}:${WORKER_GID:-1000}
     image: ${WORKER_CPU_IMAGE:-ghcr.io/mralexandrovorganization/stash-worker-cpu:bootstrap}
     entrypoint: [/app/stash-worker]
@@ -28,6 +29,7 @@ services:
       resources:
         limits: {memory: "${WORKER_MEMORY_LIMIT:-512m}", cpus: "${WORKER_CPU_LIMIT:-0.5}"}
   ollama:
+    container_name: "${CONTAINER_NAME_PREFIX:-}stash-worker-ollama"
     image: ollama/ollama:${OLLAMA_VERSION:?Run via make}
     restart: unless-stopped
     volumes: [ollama-data:/root/.ollama]
