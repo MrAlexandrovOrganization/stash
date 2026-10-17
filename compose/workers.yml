@@ -10,7 +10,7 @@ services:
       timeout: 5s
       start_period: 5m
       retries: 3
-    restart: unless-stopped
+    restart: always
     stop_grace_period: 45s
     environment:
       WORKER_ENDPOINT: ${WORKER_ENDPOINT:?Set TLS endpoint}
@@ -31,7 +31,7 @@ services:
   ollama:
     container_name: "${CONTAINER_NAME_PREFIX:-}stash-worker-ollama"
     image: ollama/ollama:${OLLAMA_VERSION:?Run via make}
-    restart: unless-stopped
+    restart: always
     volumes: [ollama-data:/root/.ollama]
     environment:
       OLLAMA_NUM_PARALLEL: "1"
