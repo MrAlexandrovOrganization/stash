@@ -24,7 +24,7 @@ services:
       - /dev/net/tun:/dev/net/tun
     cap_add: [NET_ADMIN, NET_RAW]
     healthcheck:
-      test: [CMD-SHELL, "tailscale status --json | grep -q '"BackendState": "Running"'"]
+      test: ["CMD-SHELL", "tailscale status --json | grep -q '\"BackendState\": \"Running\"'"]
       interval: 5s
       timeout: 5s
       retries: 12
