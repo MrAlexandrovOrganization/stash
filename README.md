@@ -207,7 +207,6 @@ unchanged; clients address services or explicit network aliases.
 
 See [MIGRATION.md](MIGRATION.md) for the placement, data verification and rollback.
 
-GitHub deploy keys are disabled for this repository. ASUS fetches tracked Git
-objects through a key restricted to git-upload-pack on Russia; CI reaches ASUS
-through a separate key restricted to scripts/deploy_receiver.py. The receiver
-validates the exact revision/digest and uses temporary GHCR authorization.
+The WSL coordinator uses a separate stash-coordinator checkout and a dedicated
+Tailscale sidecar. CI reaches native WSL SSH through a key restricted to the
+deployment receiver on Russia; Git fetch uses the public HTTPS origin.

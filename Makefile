@@ -155,6 +155,7 @@ config-check-examples:
 	$(MAKE) ENV_FILE=.env.mac.example config-check
 	$(MAKE) ENV_FILE=.env.wsl.example config-check
 	$(MAKE) ENV_FILE=.env.asus.example config-check
+	$(MAKE) ENV_FILE=.env.storage-wsl.example config-check
 
 check: config-check-examples
 

@@ -1,0 +1,45 @@
+# Docker Desktop needs a dedicated tailnet namespace for remote dependencies.
+services:
+  stash:
+    networks: !reset []
+    network_mode: service:stash-tailnet
+    environment:
+      METRICS_ADDRESS: ":9109"
+    depends_on:
+      stash-tailnet:
+        condition: service_healthy
+        restart: true
+  stash-tailnet:
+    container_name: "${CONTAINER_NAME_PREFIX:-}stash-tailnet"
+    image: tailscale/tailscale:${TAILSCALE_VERSION:?Run via make}
+    restart: unless-stopped
+    environment:
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      TS_AUTH_ONCE: "true"
+      TS_EXTRA_ARGS: --login-server=${HEADSCALE_URL:?Set Headscale URL} --hostname=stash-storage-wsl --accept-dns=false --accept-routes=false
+    volumes:
+      - tailnet-data:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add: [NET_ADMIN, NET_RAW]
+    healthcheck:
+      test: [CMD-SHELL, "tailscale status --json | grep -q '"BackendState": "Running"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      stash-net: {}
+      stash-api-net:
+        aliases: [stash]
+      minio-net: {}
+      prometheus-net:
+        aliases: [stash-metrics]
+    mem_limit: 128m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+volumes:
+  tailnet-data:

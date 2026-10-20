@@ -89,7 +89,7 @@ jobs:
             git fetch --quiet origin refs/heads/main
             test "$(git rev-parse FETCH_HEAD)" = "$DEPLOY_SHA"
             git merge --ff-only --quiet "$DEPLOY_SHA"
-            python3 -c 'import json,os; print(json.dumps({"revision":os.environ["DEPLOY_SHA"],"image":os.environ["SERVER_IMAGE"],"user":os.environ["GHCR_USER"],"token":os.environ["GHCR_TOKEN"]}))' | ssh -T -o BatchMode=yes -i /home/maxim/.ssh/stash-asus-deploy maxim@100.64.0.11
+            python3 -c 'import json,os; print(json.dumps({"revision":os.environ["DEPLOY_SHA"],"image":os.environ["SERVER_IMAGE"],"user":os.environ["GHCR_USER"],"token":os.environ["GHCR_TOKEN"]}))' | ssh -T -o BatchMode=yes -i /home/maxim/.ssh/stash-wsl-deploy maxim@100.64.0.3
 
   approve:
     needs: [workers, deploy]

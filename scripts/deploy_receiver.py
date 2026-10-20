@@ -41,7 +41,7 @@ def main():
         != "main"
     ):
         raise ValueError("wrong branch")
-    run("git", "fetch", "--quiet", "deployment-source", "refs/heads/main")
+    run("git", "fetch", "--quiet", "origin", "refs/heads/main")
     if (
         subprocess.check_output(["git", "rev-parse", "FETCH_HEAD"], text=True).strip()
         != revision
