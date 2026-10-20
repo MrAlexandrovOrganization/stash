@@ -22,3 +22,13 @@ The coordinator checkout is /home/maxim/projects/backends/stash-coordinator,
 separate from the unchanged workers checkout. COMPOSE_PROJECT_NAME=stash preserves
 database/network/volume identity. ASUS preparation was retired before activation
 because its Wi-Fi showed packet loss and very low transfer throughput.
+
+## Existing database index issue
+
+A heap scan on the source finds one duplicate file_unique_id hidden by the
+source's valid-marked unique index. A logical pg_restore fails when rebuilding
+that index. No rows or metadata are discarded: the migration uses a final cold
+physical PostgreSQL cluster archive with the exact source pgvector image digest.
+All table contents are compared before API activation. Keep both physical and
+logical backups; repairing this pre-existing index/data inconsistency is separate
+from moving the service and requires choosing the desired duplicate semantics.
