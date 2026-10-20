@@ -32,3 +32,19 @@ physical PostgreSQL cluster archive with the exact source pgvector image digest.
 All table contents are compared before API activation. Keep both physical and
 logical backups; repairing this pre-existing index/data inconsistency is separate
 from moving the service and requires choosing the desired duplicate semantics.
+
+## Verified on 21 October 2026
+
+The final physical cluster restored 954 items, 452 processing jobs, two worker
+records, ten counters and ten migration entries. Canonical row hashes matched
+every source table before API startup. All 1,447 files in the cold MinIO volume
+matched; two existing downloads matched through the new API.
+A synthetic image completed CLIP 512, BGE 1024 and Qwen vision processing on the
+remote worker, then the test item/object were deleted. No original records were
+removed. The source unique-index inconsistency described above remains preserved.
+
+The API tailnet address is 100.64.0.7 (stash-storage-wsl), persisted across sidecar
+recreation. PostgreSQL, MinIO and API run in separate projects/roles from the
+existing WSL workers. The coordinator checkout is backends/stash-coordinator.
+CI relays through Russia to native WSL SSH on 100.64.0.3:22; the SSH key can only
+run this deployment receiver. DEPLOY_ENABLED=true enables delivery.
