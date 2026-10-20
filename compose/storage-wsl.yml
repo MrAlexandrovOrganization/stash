@@ -1,5 +1,8 @@
 # Docker Desktop needs a dedicated tailnet namespace for remote dependencies.
 services:
+  postgres:
+    volumes: !override
+      - postgres-data:/var/lib/postgresql/data
   stash:
     networks: !reset []
     network_mode: service:stash-tailnet
