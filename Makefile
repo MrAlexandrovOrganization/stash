@@ -179,3 +179,8 @@ check: role-check
 .PHONY: role-check
 role-check:
 	python3 -m unittest discover -s scripts -p 'test_*.py'
+
+.PHONY: compose
+ARGS ?= ps
+compose:
+	$(DOCKER_COMPOSE) $(ARGS)
