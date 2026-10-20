@@ -1,5 +1,5 @@
 DOCKER_COMPOSE = docker compose
-include Makefiles/versions.mk
+include makefiles/versions.mk
 -include .worker-release.env
 -include .server-release.env
 export WORKER_CPU_IMAGE WORKER_GPU_IMAGE
@@ -14,8 +14,10 @@ COMPOSE_FILE := compose/workers.yml
 ifeq ($(WORKER_AUTODEPLOY),1)
 COMPOSE_FILE := compose/workers.yml:compose/workers.autodeploy.yml
 endif
+else ifeq ($(STACK_ROLE),server)
+COMPOSE_FILE := compose/server.yml$(if $(SERVER_COMPOSE_OVERLAY),:$(SERVER_COMPOSE_OVERLAY))
 else
-COMPOSE_FILE := compose/server.yml
+$(error Unsupported STACK_ROLE; this checkout may be retired after migration)
 endif
 export COMPOSE_FILE STACK_ROLE WORKER_AUTODEPLOY COMPOSE_PROFILES
 DOCKER_COMPOSE += --project-directory "$(CURDIR)" --env-file $(ENV_FILE)
@@ -152,6 +154,7 @@ config-check-examples:
 	$(MAKE) ENV_FILE=.env.server.example config-check
 	$(MAKE) ENV_FILE=.env.mac.example config-check
 	$(MAKE) ENV_FILE=.env.wsl.example config-check
+	$(MAKE) ENV_FILE=.env.asus.example config-check
 
 check: config-check-examples
 
@@ -171,3 +174,8 @@ deploy-image: config-check
 	$(MAKE) monitoring-install
 	python3 scripts/server_image.py record
 export SERVER_IMAGE
+
+check: role-check
+.PHONY: role-check
+role-check:
+	python3 -m unittest discover -s scripts -p 'test_*.py'

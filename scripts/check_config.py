@@ -1,5 +1,6 @@
 """Validate resolved Compose configuration without printing secret-bearing values."""
 
+import ipaddress
 import json
 import os
 import subprocess
@@ -8,8 +9,8 @@ import sys
 
 def validate(config, role, profiles):
     services = config["services"]
-    if role not in ("server", "workers"):
-        raise ValueError("STACK_ROLE must be server or workers")
+    if role not in ("server", "workers", "forwarder"):
+        raise ValueError("STACK_ROLE must be server, workers or forwarder")
     tokens, identities = set(), set()
     if role == "workers":
         if "stash" in services or "clip-embedder" in services:
@@ -29,7 +30,11 @@ def validate(config, role, profiles):
             spec = services[name]
             env = spec["environment"]
             endpoint = env.get("WORKER_ENDPOINT", "")
-            if env.get("WORKER_TRANSPORT") != "tls" or ":" not in endpoint or "://" in endpoint:
+            if (
+                env.get("WORKER_TRANSPORT") != "tls"
+                or ":" not in endpoint
+                or "://" in endpoint
+            ):
                 raise ValueError("remote workers require a gRPC TLS host:port endpoint")
             identity = env.get("WORKER_ID", "")
             if not identity or identity in identities:
@@ -39,7 +44,8 @@ def validate(config, role, profiles):
                 (
                     s
                     for s in spec.get("secrets", [])
-                    if s.get("target") == "worker-token" or s.get("source") == "worker-token"
+                    if s.get("target") == "worker-token"
+                    or s.get("source") == "worker-token"
                 ),
                 None,
             )
@@ -49,22 +55,31 @@ def validate(config, role, profiles):
             if not source or source.startswith("/missing/") or source in tokens:
                 raise ValueError("enabled workers need distinct token files")
             tokens.add(source)
-            if name == "worker-gpu" and not spec.get("deploy", {}).get("resources", {}).get(
-                "reservations", {}
-            ).get("devices"):
+            if name == "worker-gpu" and not spec.get("deploy", {}).get(
+                "resources", {}
+            ).get("reservations", {}).get("devices"):
                 raise ValueError("GPU worker needs a GPU device reservation")
-    else:
+    elif role == "server":
         coordinator = "stash" if "stash" in services else "clip-embedder"
-        expected = "stash:50058" if coordinator == "stash" else "clip-embedder:50057"
-        fallback = services["stash-worker" if coordinator == "stash" else "worker-cpu"]
-        env = fallback["environment"]
-        if env.get("WORKER_TRANSPORT") != "internal" or env.get("WORKER_ENDPOINT") != expected:
-            raise ValueError("plaintext fallback must use its private Compose endpoint")
+        if any("worker" in name for name in services):
+            raise ValueError("coordinator stack must not include inference workers")
         if not services[coordinator].get("secrets"):
             raise ValueError("coordinator requires scoped credentials")
+    else:
+        if set(services) != {"clip-embedder"} or services["clip-embedder"].get("build"):
+            raise ValueError("forwarder must contain only the proxy image")
     for spec in services.values():
-        if spec.get("ports"):
-            raise ValueError("these stacks use private networks; published ports are unsupported")
+        for port in spec.get("ports", []):
+            address = port.get("host_ip", "")
+            if (
+                role != "server"
+                or not address
+                or ipaddress.ip_address(address)
+                not in ipaddress.ip_network("100.64.0.0/10")
+            ):
+                raise ValueError(
+                    "published endpoints must bind to the server's tailnet address"
+                )
 
 
 def main():
@@ -81,7 +96,9 @@ def main():
             set(filter(None, os.getenv("COMPOSE_PROFILES", "").split(","))),
         )
     except subprocess.CalledProcessError:
-        raise SystemExit("Compose validation failed; check required configuration") from None
+        raise SystemExit(
+            "Compose validation failed; check required configuration"
+        ) from None
     except (ValueError, KeyError, TypeError) as exc:
         raise SystemExit(str(exc)) from None
     print("Compose role, transport, identities and mounts validated")

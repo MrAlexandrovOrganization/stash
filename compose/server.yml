@@ -15,14 +15,14 @@ services:
       PREFERRED_WORKER_IDS: ${PREFERRED_WORKER_IDS:-stash-mac-cpu,stash-wsl-cpu}
       ADDR: ":8080"
       POSTGRES_URL: "postgres://stash:stash@postgres:5432/stash?sslmode=disable"
-      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ENDPOINT: "${MINIO_ENDPOINT:-minio:9000}"
       MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
       MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
       WHISPER_HOST: "${WHISPER_HOST:-}"
       WHISPER_PORT: "${WHISPER_PORT:-50053}"
       # Hardcoded so a stray empty OLLAMA_URL in .env cannot silently disable
       # the vision provider. Override here only if Ollama lives elsewhere.
-      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_URL: "${OLLAMA_URL:-http://ollama:11434}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5vl:3b}"
       # Text-embedding model for descriptions. Must match an exact Ollama tag
       # (Ollama 0.30.5 rejects a bare `bge-m3` when the pull is tagged bge-m3:567m).
@@ -46,44 +46,11 @@ services:
       caddy-transcriber-net: {}
       stash-api-net: {}
       minio-net: {}
-      whisper-net: {}
-      ollama-net: {}
-      clip-net: {}
-      jaeger-net: {}
     deploy:
       resources:
         limits:
           memory: 512m
           cpus: "0.5"
-
-  stash-worker:
-    container_name: "${CONTAINER_NAME_PREFIX:-}stash-worker"
-    user: ${WORKER_UID:-1000}:${WORKER_GID:-1000}
-    image: ${SERVER_IMAGE:-stash:local}
-    build:
-      context: .
-      args:
-        GO_VERSION: ${GO_VERSION:?Run via make}
-        ALPINE_VERSION: ${ALPINE_VERSION:?Run via make}
-    entrypoint: [/app/stash-worker]
-    restart: unless-stopped
-    stop_grace_period: 45s
-    environment:
-      WORKER_ENDPOINT: stash:50058
-      WORKER_TRANSPORT: internal
-      WORKER_ID: stash-server-fallback
-      WORKER_TOKEN_FILE: /run/secrets/worker-token
-      OLLAMA_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5vl:3b}
-      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-bge-m3:567m}
-    secrets: [worker-token]
-    networks: [stash-net, ollama-net]
-    logging:
-      driver: json-file
-      options: {max-size: 10m, max-file: "3"}
-    deploy:
-      resources:
-        limits: {memory: "${WORKER_MEMORY_LIMIT:-512m}", cpus: "${WORKER_CPU_LIMIT:-0.5}"}
 
   postgres:
     container_name: "${CONTAINER_NAME_PREFIX:-}stash-postgres"
@@ -112,8 +79,6 @@ services:
 secrets:
   worker-credentials:
     file: ${WORKER_CREDENTIALS_PATH:?Set worker credentials registry path}
-  worker-token:
-    file: ${WORKER_TOKEN_PATH:?Set server fallback token path}
 
 networks:
   prometheus-net:
@@ -126,19 +91,6 @@ networks:
   minio-net:
     external: true
     name: minio-net
-  whisper-net:
-    external: true
-    name: whisper-net
-  ollama-net:
-    external: true
-    name: ollama-net
-  # Created by the clip-embedder repo's own docker-compose; stash joins it.
-  clip-net:
-    external: true
-    name: clip-net
-  jaeger-net:
-    external: true
-    name: jaeger-net
 
 volumes:
   postgres-data:

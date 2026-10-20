@@ -37,9 +37,8 @@ again after expiry. Completion validates owner/instance/lease and rejects stale
 results. Failed attempts back off, with at most five attempts. Queued jobs have
 no TTL; terminal results are retained for 30 days since last access.
 
-Mac/WSL ready workers suppress the server fallback, including while busy. The
-fallback takes jobs only when all configured preferred worker IDs are unavailable
-with the required models. Models must be present before a worker reports ready.
+Inference runs only on remote workers. The server Compose stack contains no
+fallback worker; when every remote worker is offline, queued jobs wait. Models must be present before a worker reports ready.
 The server stores SHA-256 token hashes in a protected credential registry;
 workers mount their own raw tokens as read-only secrets. Never commit real .env,
 tokens or registry files. WORKER_UID/WORKER_GID must match the owner of token
@@ -83,7 +82,7 @@ updater at cd4dcb2393fdc159f76cb98570f99b724edc2384, adapted for these images.
 make install installs pinned tools/dependencies; make format applies formatting;
 make check is read-only analysis and existing Go tests. Models, inference, production queues and Telegram
 are not used by ordinary checks. make versions shows tool/image pins. Version
-sources are Makefiles/versions.mk, go.mod or pyproject.toml/uv.lock. Standalone worker
+sources are makefiles/versions.mk, go.mod or pyproject.toml/uv.lock. Standalone worker
 health reflects readiness reports; docker logs includes structured lifecycle,
 attempt outcome and duration without media, descriptions or bearer credentials.
 
@@ -160,10 +159,10 @@ Generated Go files remain ignored and are regenerated from committed protos.
 
 ## Repository layout and local operation
 
-The root contains one Makefile. Version pins live in `Makefiles/versions.mk`.
+The root contains one Makefile. Version pins live in `makefiles/versions.mk`.
 Compose configurations live in `compose/`:
 
-- `server.yml`: coordinator, persistent storage and server fallback.
+- `server.yml`: coordinator and persistent storage, without an inference worker.
 - `workers.yml`: device workers and their model cache/runtime.
 - `workers.autodeploy.yml`: optional approved-release updater.
 
@@ -203,3 +202,12 @@ Compose uses explicit service names without replica numbers. Set
 `CONTAINER_NAME_PREFIX` (for example `dev-`) for an additional local or CI stack
 on the same Docker host. Keep Compose project/service labels and volume names
 unchanged; clients address services or explicit network aliases.
+
+## Migration from server
+
+See [MIGRATION.md](MIGRATION.md) for the placement, data verification and rollback.
+
+GitHub deploy keys are disabled for this repository. ASUS fetches tracked Git
+objects through a key restricted to git-upload-pack on Russia; CI reaches ASUS
+through a separate key restricted to scripts/deploy_receiver.py. The receiver
+validates the exact revision/digest and uses temporary GHCR authorization.

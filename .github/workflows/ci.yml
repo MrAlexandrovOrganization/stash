@@ -56,9 +56,15 @@ jobs:
 
   deploy:
     needs: [check, workers]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v4
@@ -67,20 +73,23 @@ jobs:
       - uses: appleboy/ssh-action@v1.2.2
         env:
           SERVER_IMAGE: ${{ steps.server.outputs.server_image }}
+          DEPLOY_SHA: ${{ github.sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           command_timeout: 40m
-          envs: SERVER_IMAGE
+          envs: SERVER_IMAGE,DEPLOY_SHA,GHCR_USER,GHCR_TOKEN
           script: |
             set -eu
-            cd '${{ secrets.VM_PROJECT_PATH }}'
+            cd /home/maxim/projects/backends/stash
             test -z "$(git status --porcelain)"
-            git fetch origin '${{ github.sha }}'
-            git merge --ff-only '${{ github.sha }}'
-            test "$(git rev-parse HEAD)" = '${{ github.sha }}'
-            make deploy-image
+            git fetch --quiet origin refs/heads/main
+            test "$(git rev-parse FETCH_HEAD)" = "$DEPLOY_SHA"
+            git merge --ff-only --quiet "$DEPLOY_SHA"
+            python3 -c 'import json,os; print(json.dumps({"revision":os.environ["DEPLOY_SHA"],"image":os.environ["SERVER_IMAGE"],"user":os.environ["GHCR_USER"],"token":os.environ["GHCR_TOKEN"]}))' | ssh -T -o BatchMode=yes -i /home/maxim/.ssh/stash-asus-deploy maxim@100.64.0.11
 
   approve:
     needs: [workers, deploy]

@@ -1,0 +1,5 @@
+services:
+  stash:
+    ports:
+      - "${TAILNET_BIND_IP:?Set this host's tailnet IP}:8080:8080"
+      - "${TAILNET_BIND_IP:?Set this host's tailnet IP}:50058:50058"
