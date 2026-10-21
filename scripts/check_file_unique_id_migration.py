@@ -34,17 +34,26 @@ def sql(statement, database="postgres"):
 
 def check():
     image = "pgvector/pgvector:" + os.environ["PGVECTOR_VERSION"]
-    run(
-        "docker", "run", "--detach", "--rm", "--network", "none", "--name", NAME,
-        "--env", "POSTGRES_HOST_AUTH_METHOD=trust", image,
-    )
     try:
+        run(
+            "docker", "run", "--detach", "--rm", "--network", "none", "--name", NAME,
+            "--env", "POSTGRES_HOST_AUTH_METHOD=trust", image,
+        )
         for _ in range(60):
+            # The image starts a temporary server during initdb. pg_isready
+            # alone can succeed just before that server shuts down.
+            logs = subprocess.run(
+                ["docker", "logs", NAME], stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, timeout=10,
+            ).stdout
             ready = subprocess.run(
                 ["docker", "exec", NAME, "pg_isready", "-U", "postgres"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
             )
-            if ready.returncode == 0:
+            if (
+                b"PostgreSQL init process complete; ready for start up." in logs
+                and ready.returncode == 0
+            ):
                 break
             time.sleep(0.5)
         else:
@@ -72,7 +81,11 @@ def check():
                              embedding_image = array_fill(0.5::real, ARRAY[512])::vector;
             CREATE TABLE before_repair AS SELECT id, to_jsonb(items) AS original FROM items;
         """)
-        sql("BEGIN;" + (ROOT / "migrations/011_file_unique_id_index_repair.sql").read_text() + "COMMIT;")
+        sql(
+            "BEGIN;"
+            + (ROOT / "migrations/011_file_unique_id_index_repair.sql").read_text()
+            + "COMMIT;"
+        )
         query = (ROOT / "internal/repository/sql/get_by_file_unique_id.sql").read_text()
         # Prepared statements are connection-local; use the actual embedded query
         # in the same session when checking which record receives re-uploads.
@@ -97,7 +110,7 @@ def check():
               END;
             END $$;
             CREATE EXTENSION amcheck;
-            SELECT bt_index_check('items_file_unique_id_idx', true);
+            SELECT bt_index_check('items_file_unique_id_idx', true, true);
         """)
         dump = run("docker", "exec", NAME, "pg_dump", "-U", "postgres", "-Fc", "postgres")
         sql("CREATE DATABASE restored")
@@ -107,7 +120,7 @@ def check():
         )
         if sql("SELECT count(*) FROM items", "restored") != "7":
             raise AssertionError("logical restore lost items")
-        sql("SELECT bt_index_check('items_file_unique_id_idx', true)", "restored")
+        sql("SELECT bt_index_check('items_file_unique_id_idx', true, true)", "restored")
         # Ordinary metadata updates must not turn a historical copy into an owner.
         sql("UPDATE items SET description='edited' WHERE id='old'")
         if sql("SELECT file_unique_id_legacy_duplicate FROM items WHERE id='old'") != "t":
