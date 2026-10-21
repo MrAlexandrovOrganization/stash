@@ -314,9 +314,10 @@ func (r *postgres) ClearAIDescriptionError(ctx context.Context, id string) error
 }
 
 // GetByFileUniqueID returns the item uploaded from the given Telegram file, if
-// any. Used to overwrite duplicates (and repair failed uploads) on re-send.
+// any. Historical duplicates retain their original IDs/media but do not own
+// re-upload deduplication. The partial unique index enforces a single owner.
 func (r *postgres) GetByFileUniqueID(ctx context.Context, fileUniqueID string) (*model.Item, error) {
-	row := r.db.QueryRow(ctx, `SELECT `+itemColumns+` FROM items WHERE file_unique_id = $1`, fileUniqueID)
+	row := r.db.QueryRow(ctx, processingSQL("get_by_file_unique_id"), fileUniqueID)
 	return scanItem(row)
 }
 

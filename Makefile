@@ -177,6 +177,10 @@ deploy-image: config-check
 export SERVER_IMAGE
 
 check: role-check
+.PHONY: migration-test
+migration-test:
+	python3 scripts/check_file_unique_id_migration.py
+check: migration-test
 .PHONY: role-check
 role-check:
 	python3 -m unittest discover -s scripts -p 'test_*.py'

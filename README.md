@@ -210,3 +210,22 @@ See [MIGRATION.md](MIGRATION.md) for the placement, data verification and rollba
 The WSL coordinator uses a separate stash-coordinator checkout and a dedicated
 Tailscale sidecar. CI reaches native WSL SSH through a key restricted to the
 deployment receiver on Russia; Git fetch uses the public HTTPS origin.
+
+Migration 011 rebuilds the inconsistent legacy `file_unique_id` index without
+deleting items/files or changing their original metadata, timestamps or vectors.
+For each duplicated Telegram ID, the newest-created item (then greatest item ID
+on a tie) owns re-upload deduplication. Older copies retain their `file_unique_id`
+and are marked `file_unique_id_legacy_duplicate` in PostgreSQL; they remain
+available through ordinary item listing, search, download, edit and deletion.
+The unique index covers only deduplication owners, including all new items.
+Re-sending updates the owner; deleting it does not promote a historical copy:
+the next upload creates a new owner. The marker is operational database metadata
+and does not change the existing JSON API. A fresh database backup is required
+before rollout; startup applies this migration atomically under the existing lock.
+An older binary must not be deployed after 011 because its unfiltered lookup could
+choose a historical copy. Restore a compatible binary or forward-fix it.
+
+`make migration-test` (also part of `make check`) runs synthetic duplicate/null
+fixtures, the embedded repository lookup, btree heap coverage and a complete
+logical dump/restore in a temporary pinned PostgreSQL container. It needs Docker,
+publishes no ports, mounts no host data and never reads application DB settings.
