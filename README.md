@@ -11,6 +11,12 @@ cancellation and are applied only to the current item generation. Manual
 Describe persists the pending intent before starting background preparation.
 Stale results cannot overwrite newer uploads or descriptions.
 
+The `/items` and `/similar` JSON lists use gzip when the client advertises it
+with `Accept-Encoding`. This reduces transfer time for large storage lists over
+the tailnet relay; stash-bot's Go HTTP transport negotiates and decodes it
+automatically. Clients without gzip support keep the same uncompressed JSON.
+Stored files and metadata are unchanged.
+
 CLIP image embeddings and text-to-image search use the separate clip-embedder
 queue. Its protobuf snapshot is committed under proto/embed; source is the
 clip-embedder repository's proto/embed.proto from the coordinated worker rollout.

@@ -101,7 +101,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []*model.Item{}
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeListJSON(w, r, items)
 }
 
 func (h *Handler) getItem(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +254,7 @@ func (h *Handler) similar(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []*model.Item{}
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeListJSON(w, r, items)
 }
 
 // describeItem triggers on-demand AI description generation for one item.
