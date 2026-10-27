@@ -85,6 +85,11 @@ Docker socket access and manages only explicitly labelled workers in its own
 Compose project. Its bootstrap source is vendored from transcriber's approved
 updater at cd4dcb2393fdc159f76cb98570f99b724edc2384, adapted for these images.
 
+The Russia-to-WSL deploy SSH hop selects `curve25519-sha256` and bounds connection
+setup to 30 seconds. On 27 October the default hybrid key exchange stalled on
+this tailnet path, while Curve25519 completed successfully. The restricted
+receiver key and immutable image deployment remain in use.
+
 make install installs pinned tools/dependencies; make format applies formatting;
 make check is read-only analysis and existing Go tests. Models, inference, production queues and Telegram
 are not used by ordinary checks. make versions shows tool/image pins. Version
