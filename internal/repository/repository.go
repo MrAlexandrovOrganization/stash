@@ -11,7 +11,12 @@ type Repository interface {
 	SetAIDescriptionErrorAt(ctx context.Context, id, message string, generation int64) error
 	SetTextEmbeddingAt(ctx context.Context, id string, vec []float32, generation int64) error
 	SetImageEmbeddingAt(ctx context.Context, id string, vec []float32, generation int64) error
-	Save(ctx context.Context, item *model.Item) error
+	// ReserveUpload journals a fresh key before storage I/O. SaveUpload atomically
+	// publishes it, chooses the deduplication owner and retires the previous key.
+	ReserveUpload(ctx context.Context, path string) error
+	SaveUpload(ctx context.Context, item *model.Item) (*model.Item, error)
+	// CollectFile locks one due journal entry through the idempotent removal.
+	CollectFile(ctx context.Context, remove func(context.Context, string) error) (bool, error)
 	Get(ctx context.Context, id string) (*model.Item, error)
 	Delete(ctx context.Context, id string) error
 	Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error)

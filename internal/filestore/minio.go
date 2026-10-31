@@ -36,15 +36,14 @@ func NewMinio(endpoint, accessKey, secretKey string, useSSL bool) (FileStore, er
 	return &minioStore{client: client}, nil
 }
 
-func (s *minioStore) Put(ctx context.Context, itemID, fileName string, r io.Reader, size int64, contentType string) (string, error) {
-	path := fmt.Sprintf("%s/%s", itemID, fileName)
+func (s *minioStore) Put(ctx context.Context, path string, r io.Reader, size int64, contentType string) error {
 	_, err := s.client.PutObject(ctx, bucket, path, r, size, minio.PutObjectOptions{
 		ContentType: contentType,
 	})
 	if err != nil {
-		return "", fmt.Errorf("minio put: %w", err)
+		return fmt.Errorf("minio put: %w", err)
 	}
-	return path, nil
+	return nil
 }
 
 func (s *minioStore) Get(ctx context.Context, path string) (io.ReadCloser, error) {

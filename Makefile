@@ -181,6 +181,10 @@ check: role-check
 migration-test:
 	python3 scripts/check_file_unique_id_migration.py
 check: migration-test
+.PHONY: upload-test
+upload-test: generate
+	python3 scripts/check_uploads.py
+check: upload-test
 .PHONY: role-check
 role-check:
 	python3 -m unittest discover -s scripts -p 'test_*.py'

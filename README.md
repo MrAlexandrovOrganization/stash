@@ -240,3 +240,41 @@ choose a historical copy. Restore a compatible binary or forward-fix it.
 fixtures, the embedded repository lookup, btree heap coverage and a complete
 logical dump/restore in a temporary pinned PostgreSQL container. It needs Docker,
 publishes no ports, mounts no host data and never reads application DB settings.
+
+## Safe file replacement and cleanup
+
+Every upload reserves a fresh `uploads/<UUID>` object key in PostgreSQL before
+writing to MinIO. Filenames remain item metadata; existing legacy paths remain
+readable. Re-upload commits the new reference, processing generation and cleanup
+of the previous key atomically. Concurrent uploads of the same Telegram identity
+serialize only their database publication, including the first upload. The last
+successful publication wins while preserving the item ID and creation time.
+
+Migration 012 adds `file_gc` and indexes; it does not rewrite items or objects.
+Startup applies it under the existing migration lock. Include the journal in
+database backups. Uploads are bounded to 30 minutes; their reservations last one
+hour. An expired reservation cannot publish a file. Failed/cancelled uploads and
+lost commit responses never trigger immediate object deletion: committed item
+references determine which objects remain live.
+
+The coordinator resumes GC on startup and every minute, at most 100 objects per
+pass with a 15-second timeout per object. Replaced/deleted objects have a one-hour
+grace period. Item deletion atomically journals cleanup and returns before MinIO
+removal. GC excludes every key still referenced by an item, locks each journal
+entry through removal and retries failures after one minute. Deleting an already
+removed object is safe. Legacy unreferenced objects created before this journal
+are not automatically discovered or deleted. Incomplete MinIO multipart uploads
+remain subject to the storage administrator's existing lifecycle policy.
+
+Use a fresh database backup before rollout. Keep the additive migration on
+rollback; stop the new GC before running an older coordinator. Older upload code
+does not maintain this journal and reintroduces unsafe replacement, so prefer a
+forward fix. Objects already collected cannot be restored by rolling back code.
+
+`make upload-test` (included in `make check`) runs upload/GC tests with the Go race
+detector and the pinned PostgreSQL image. It creates disposable databases and a
+random loopback-only port, mounts no host data and never reads application DB
+configuration. Synthetic object storage models partial writes and lost responses;
+the suite does not upload to production MinIO. It covers SQL rollback, cancellation,
+uncertain commit, concurrent first/re-uploads, expired reservations, GC retries,
+restart recovery and concurrent collectors protecting live references.

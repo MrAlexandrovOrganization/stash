@@ -24,52 +24,9 @@ const itemColumns = `id, type, file_name, content_type, size, storage_path, desc
 	source, original_caption, transcript, ai_description, ai_description_error,
 	transcript_job_id, telegram_file_id, file_unique_id, created_at, updated_at, processing_generation`
 
-func (r *postgres) Save(ctx context.Context, item *model.Item) error {
-	_, err := r.db.Exec(ctx, `
-		INSERT INTO items (id, type, file_name, content_type, size, storage_path, description, tags,
-			source, original_caption, transcript, ai_description, transcript_job_id, telegram_file_id,
-			file_unique_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-		ON CONFLICT (id) DO UPDATE SET
-			type = EXCLUDED.type,
-			file_name = EXCLUDED.file_name,
-			content_type = EXCLUDED.content_type,
-			size = EXCLUDED.size,
-			storage_path = EXCLUDED.storage_path,
-			description = EXCLUDED.description,
-			tags = EXCLUDED.tags,
-			source = EXCLUDED.source,
-			original_caption = EXCLUDED.original_caption,
-			transcript = EXCLUDED.transcript,
-			ai_description = EXCLUDED.ai_description,
-			transcript_job_id = EXCLUDED.transcript_job_id,
-			telegram_file_id = EXCLUDED.telegram_file_id,
-			file_unique_id = EXCLUDED.file_unique_id,
-			updated_at = EXCLUDED.updated_at`,
-		item.ID, string(item.Type), item.FileName, item.ContentType, item.Size,
-		item.StoragePath, item.Description, item.Tags,
-		item.Source, item.OriginalCaption,
-		item.Transcript, item.AIDescription, item.TranscriptJobID, item.TelegramFileID,
-		item.FileUniqueID,
-		item.CreatedAt, item.UpdatedAt,
-	)
-	return err
-}
-
 func (r *postgres) Get(ctx context.Context, id string) (*model.Item, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+itemColumns+` FROM items WHERE id = $1`, id)
 	return scanItem(row)
-}
-
-func (r *postgres) Delete(ctx context.Context, id string) error {
-	tag, err := r.db.Exec(ctx, `DELETE FROM items WHERE id = $1`, id)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
 }
 
 // defaultSearchLimit bounds an unbounded Search so the backend never scans and

@@ -106,6 +106,9 @@ func main() {
 	}
 
 	repo := repository.NewPostgres(db)
+	gcContext, stopGC := context.WithCancel(context.Background())
+	defer stopGC()
+	go service.RunFileGC(gcContext, repo, fs)
 
 	var wc *whisper.Client
 	if cfg.WhisperHost != "" {

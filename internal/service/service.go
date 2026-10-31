@@ -140,71 +140,29 @@ func WithEmbeddingBackfill(interval time.Duration, batch int) Option {
 	}
 }
 
+// uploadTimeout is shorter than the database reservation's one-hour lifetime.
+// A reservation that expires can never be published, even if storage was slow.
+const uploadTimeout = 30 * time.Minute
+
 func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*model.Item, error) {
+	ctx, cancel := context.WithTimeout(ctx, uploadTimeout)
+	defer cancel()
 	now := time.Now()
-
-	// Deduplicate by Telegram's stable file_unique_id: re-sending the same file
-	// (or re-sending one that previously failed) overwrites the existing record
-	// in place instead of creating a duplicate.
-	if meta.FileUniqueID != "" {
-		if existing, err := s.repo.GetByFileUniqueID(ctx, meta.FileUniqueID); err == nil && existing != nil {
-			path, perr := s.files.Put(ctx, existing.ID, meta.FileName, r, meta.Size, meta.ContentType)
-			if perr != nil {
-				return nil, fmt.Errorf("store file: %w", perr)
-			}
-			// Only remove the old object if the storage path actually changed.
-			if path != existing.StoragePath {
-				_ = s.files.Delete(ctx, existing.StoragePath)
-			}
-
-			fu := meta.FileUniqueID
-			updated := &model.Item{
-				ID:              existing.ID,
-				Type:            meta.Type,
-				FileName:        meta.FileName,
-				ContentType:     meta.ContentType,
-				Size:            meta.Size,
-				StoragePath:     path,
-				Description:     meta.Description,
-				Tags:            meta.Tags,
-				Source:          meta.Source,
-				OriginalCaption: meta.OriginalCaption,
-				FileUniqueID:    &fu,
-				CreatedAt:       existing.CreatedAt,
-				UpdatedAt:       now,
-			}
-			if updated.Tags == nil {
-				updated.Tags = []string{}
-			}
-			if serr := s.repo.Save(ctx, updated); serr != nil {
-				_ = s.files.Delete(ctx, path)
-				return nil, fmt.Errorf("save item: %w", serr)
-			}
-			_ = s.repo.ClearAIDescriptionError(ctx, existing.ID)
-			s.processUploadedMedia(existing.ID, path, meta)
-			return updated, nil
-		}
-	}
-
 	id := uuid.New().String()
-	path, err := s.files.Put(ctx, id, meta.FileName, r, meta.Size, meta.ContentType)
-	if err != nil {
+	// The key is independent of the user-supplied filename and deduplicated item
+	// ID. Concurrent attempts always write different objects, including on retry.
+	path := "uploads/" + uuid.NewString()
+	if err := s.repo.ReserveUpload(ctx, path); err != nil {
+		return nil, fmt.Errorf("reserve upload: %w", err)
+	}
+	if err := s.files.Put(ctx, path, r, meta.Size, meta.ContentType); err != nil {
 		return nil, fmt.Errorf("store file: %w", err)
 	}
-
 	item := &model.Item{
-		ID:              id,
-		Type:            meta.Type,
-		FileName:        meta.FileName,
-		ContentType:     meta.ContentType,
-		Size:            meta.Size,
-		StoragePath:     path,
-		Description:     meta.Description,
-		Tags:            meta.Tags,
-		Source:          meta.Source,
-		OriginalCaption: meta.OriginalCaption,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID: id, Type: meta.Type, FileName: meta.FileName,
+		ContentType: meta.ContentType, Size: meta.Size, StoragePath: path,
+		Description: meta.Description, Tags: meta.Tags, Source: meta.Source,
+		OriginalCaption: meta.OriginalCaption, CreatedAt: now, UpdatedAt: now,
 	}
 	if item.Tags == nil {
 		item.Tags = []string{}
@@ -213,14 +171,14 @@ func (s *svc) Upload(ctx context.Context, r io.Reader, meta model.UploadMeta) (*
 		fu := meta.FileUniqueID
 		item.FileUniqueID = &fu
 	}
-
-	if err := s.repo.Save(ctx, item); err != nil {
-		_ = s.files.Delete(ctx, path)
+	saved, err := s.repo.SaveUpload(ctx, item)
+	if err != nil {
+		// This includes ambiguous commit outcomes: the journal decides whether the
+		// new object is live. Never delete either version from a failed request.
 		return nil, fmt.Errorf("save item: %w", err)
 	}
-
-	s.processUploadedMedia(item.ID, path, meta)
-	return item, nil
+	s.processUploadedMedia(saved.ID, saved.StoragePath, meta)
+	return saved, nil
 }
 
 // processUploadedMedia kicks off async media processing (transcription for
@@ -270,14 +228,7 @@ func (s *svc) GetFile(ctx context.Context, id string) (io.ReadCloser, *model.Ite
 }
 
 func (s *svc) Delete(ctx context.Context, id string) error {
-	item, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-	if err := s.repo.Delete(ctx, id); err != nil {
-		return err
-	}
-	return s.files.Delete(ctx, item.StoragePath)
+	return s.repo.Delete(ctx, id)
 }
 
 func (s *svc) Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error) {
