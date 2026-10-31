@@ -110,6 +110,7 @@ func (r *postgres) Update(ctx context.Context, id string, meta model.UpdateMeta)
 	}
 	if meta.Transcript != nil {
 		sets = append(sets, fmt.Sprintf("transcript = $%d", i))
+		sets = append(sets, "transcript_job_id = NULL")
 		args = append(args, *meta.Transcript)
 		i++
 	}
@@ -143,74 +144,6 @@ func (r *postgres) Update(ctx context.Context, id string, meta model.UpdateMeta)
 		return ErrNotFound
 	}
 	return nil
-}
-
-func (r *postgres) SetTranscriptJob(ctx context.Context, id, jobID string) error {
-	_, err := r.db.Exec(ctx,
-		"UPDATE items SET transcript_job_id = $1, updated_at = $2 WHERE id = $3",
-		jobID, time.Now(), id,
-	)
-	return err
-}
-
-func (r *postgres) UpdateTranscript(ctx context.Context, id, transcript string) error {
-	_, err := r.db.Exec(ctx,
-		"UPDATE items SET transcript = $1, transcript_job_id = NULL, updated_at = $2 WHERE id = $3",
-		transcript, time.Now(), id,
-	)
-	return err
-}
-
-func (r *postgres) PendingTranscripts(ctx context.Context) ([]*model.Item, error) {
-	rows, err := r.db.Query(ctx, `
-		SELECT `+itemColumns+`
-		FROM items WHERE transcript_job_id IS NOT NULL`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var items []*model.Item
-	for rows.Next() {
-		item, err := scanItem(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-// PendingTranscriptSubmissions returns videos that were uploaded while Whisper
-// was unavailable (or before it existed) and thus never got a transcription
-// job. Newest first. An empty transcript (as opposed to NULL) marks a job that
-// already failed permanently and is not retried.
-func (r *postgres) PendingTranscriptSubmissions(ctx context.Context, limit int) ([]*model.Item, error) {
-	if limit <= 0 {
-		limit = 1
-	}
-	rows, err := r.db.Query(ctx, `
-		SELECT `+itemColumns+`
-		FROM items
-		WHERE type = 'video'
-		  AND transcript IS NULL
-		  AND transcript_job_id IS NULL
-		ORDER BY created_at DESC
-		LIMIT $1`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var items []*model.Item
-	for rows.Next() {
-		item, err := scanItem(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
 }
 
 func (r *postgres) SetAIDescription(ctx context.Context, id, description string) error {

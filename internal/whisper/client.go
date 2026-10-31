@@ -57,7 +57,10 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-func (c *Client) Submit(ctx context.Context, r io.Reader, format string) (jobID string, err error) {
+func (c *Client) Submit(ctx context.Context, r io.Reader, format, requestID string) (jobID string, err error) {
+	if requestID == "" {
+		return "", fmt.Errorf("transcription request ID required")
+	}
 	ctx, cancel := context.WithTimeout(ctx, uploadTimeout)
 	defer cancel()
 
@@ -65,14 +68,30 @@ func (c *Client) Submit(ctx context.Context, r io.Reader, format string) (jobID 
 	if err != nil {
 		return "", wrapErr(err)
 	}
-	if err := sendChunks(stream, r, format); err != nil {
+	if err := sendChunks(stream, r, format, requestID); err != nil {
 		return "", err
 	}
 	resp, err := stream.CloseAndRecv()
 	if err != nil {
 		return "", wrapErr(err)
 	}
+	if resp.JobId == "" {
+		return "", fmt.Errorf("transcriber returned an empty job ID")
+	}
 	return resp.JobId, nil
+}
+
+func (c *Client) Ack(ctx context.Context, jobID string) error {
+	ctx, cancel := context.WithTimeout(ctx, pollTimeout)
+	defer cancel()
+	resp, err := c.stub.Ack(ctx, &pb.AckRequest{JobId: jobID})
+	if err != nil {
+		return wrapErr(err)
+	}
+	if !resp.Acknowledged {
+		return fmt.Errorf("transcriber did not acknowledge receipt")
+	}
+	return nil
 }
 
 func (c *Client) GetStatus(ctx context.Context, jobID string) (*JobResult, error) {
@@ -92,18 +111,26 @@ func (c *Client) GetStatus(ctx context.Context, jobID string) (*JobResult, error
 
 func sendChunks(stream interface {
 	Send(*pb.TranscribeChunk) error
-}, r io.Reader, format string) error {
+}, r io.Reader, format, requestID string) error {
+	// A replay may finish immediately after this header. Send can then return
+	// EOF; CloseAndRecv still carries the original job ID (or the RPC error).
+	if err := stream.Send(&pb.TranscribeChunk{
+		Format: format, RequestId: requestID, RetainUntilAck: true,
+	}); err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		return wrapErr(err)
+	}
 	buf := make([]byte, chunkSize)
-	first := true
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
 			chunk := &pb.TranscribeChunk{Data: buf[:n]}
-			if first {
-				chunk.Format = format
-				first = false
-			}
 			if sendErr := stream.Send(chunk); sendErr != nil {
+				if sendErr == io.EOF {
+					return nil
+				}
 				return wrapErr(sendErr)
 			}
 		}

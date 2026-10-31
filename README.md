@@ -279,3 +279,50 @@ configuration. Synthetic object storage models partial writes and lost responses
 the suite does not upload to production MinIO. It covers SQL rollback, cancellation,
 uncertain commit, concurrent first/re-uploads, expired reservations, GC retries,
 restart recovery and concurrent collectors protecting live references.
+
+## Durable transcription recovery
+
+Migration 014 adds `transcription_tasks` and a separate item
+`transcript_generation`. Before Submit, Stash commits a unique
+`stash:transcript:<UUID>` request ID for the item/generation and immutable media
+key. Retries, including after a lost response or restart, reuse the same request
+ID, format and bytes and set `retain_until_ack=true`. Existing job IDs are adopted
+without submitting a duplicate. A missing legacy result clears the expected job
+ID and resubmits through the durable request instead of becoming stuck forever.
+
+Terminal text/error and the guarded item update commit before Ack. A retryable
+Ack intent survives restarts and uncertain commits. `NOT_FOUND` during Ack is
+accepted only after durable terminal receipt; before receipt it causes recovery.
+Remote error text is neither logged nor exposed. Permanent failures retain the
+existing empty-transcript marker. Completed journal rows retain identity/outcome
+metadata, with their duplicated result text cleared after acknowledgement.
+
+Re-upload and manual transcript edits advance `transcript_generation`;
+description/AI/embedding changes do not. Applying a result checks generation,
+media path and expected job ID. Late results for replaced, edited or deleted
+items are durably recorded and acknowledged without changing current content.
+Outstanding submissions keep their immutable source objects out of file GC,
+including after logical item deletion, until terminal receipt resolves possible
+lost Submit responses. An upstream outage can therefore retain obsolete source
+files; this is deliberate recovery state, not an orphan sweep.
+
+Startup resumes journal submission, polling and Ack. Transient failures use
+persisted backoff from five seconds to five minutes; the submission recovery pass
+runs every minute. Ordinary status polling runs every five seconds. Work per pass
+is bounded to two uploads and 32 statuses/Acks. Include the journal in database
+backups and make a fresh backup before rollout. Keep migration 014 on rollback;
+an older coordinator cannot provide these recovery guarantees. This release
+requires the existing Transcriber Ack/retention API before activating Stash.
+
+The consumer proto subset under `proto/whisper/whisper.proto` preserves its
+existing Go package and wire fields. Ack and fields 4/5 of `TranscribeChunk` are
+copied from canonical Transcriber `proto/whisper.proto` at
+`6b785fb9f1aed42c31e76a955713a5fa370aea4b`. Worker-only services are intentionally
+excluded. Refresh this subset explicitly from a reviewed canonical revision;
+ordinary builds use only this repository and `make proto-check` verifies FILE
+compatibility with the previous revision.
+
+`make upload-test` also runs the PostgreSQL transcription recovery suite with the
+race detector and synthetic remote results. Ordinary `make test` includes an
+in-memory gRPC test of retained Submit/replay/Ack, including an early replay
+response. No production media, transcription or inference is used in these tests.

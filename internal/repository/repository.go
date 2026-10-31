@@ -21,11 +21,14 @@ type Repository interface {
 	Delete(ctx context.Context, id string) error
 	Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error)
 	Update(ctx context.Context, id string, meta model.UpdateMeta) error
-	SetTranscriptJob(ctx context.Context, id, jobID string) error
-	UpdateTranscript(ctx context.Context, id, transcript string) error
-	PendingTranscripts(ctx context.Context) ([]*model.Item, error)
-	// PendingTranscriptSubmissions returns videos that have never been
-	// submitted for transcription (no transcript, no job).
+	EnsureTranscription(ctx context.Context, id, path, format string) error
+	TranscriptionTasks(ctx context.Context, state string, submit bool, limit int) ([]*model.TranscriptionTask, error)
+	SetTranscriptionJob(ctx context.Context, requestID, jobID string) error
+	CompleteTranscription(ctx context.Context, requestID, jobID, terminalStatus, text string) error
+	MissingTranscription(ctx context.Context, requestID, jobID string) error
+	AcknowledgeTranscription(ctx context.Context, requestID, jobID string) error
+	RetryTranscription(ctx context.Context, requestID string) error
+	// PendingTranscriptSubmissions includes legacy jobs not yet in the journal.
 	PendingTranscriptSubmissions(ctx context.Context, limit int) ([]*model.Item, error)
 	SetAIDescription(ctx context.Context, id, description string) error
 	SetAIDescriptionError(ctx context.Context, id, errMsg string) error

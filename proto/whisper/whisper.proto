@@ -15,6 +15,17 @@ service TranscriptionService {
 
   // Cancel a pending or running job.
   rpc Cancel(CancelRequest) returns (CancelResponse);
+
+  // Confirm durable receipt of a terminal result or error.
+  rpc Ack(AckRequest) returns (AckResponse);
+}
+
+message AckRequest {
+  string job_id = 1;
+}
+
+message AckResponse {
+  bool acknowledged = 1;
 }
 
 message CancelRequest {
@@ -45,6 +56,10 @@ message TranscribeChunk {
   bytes data = 1;
   string format = 2; // first chunk: file format ("ogg", "mp4", etc.)
   TranscriptionOptions options = 3; // first chunk: transcription options (optional)
+  // First chunk only; retries must use the same bytes and options.
+  string request_id = 4;
+  // Preserve terminal result/error until explicit Ack.
+  bool retain_until_ack = 5;
 }
 
 message TranscribeResponse {

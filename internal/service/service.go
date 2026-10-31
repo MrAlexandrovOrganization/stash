@@ -9,6 +9,7 @@ import (
 	"mime"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,14 +44,16 @@ var ErrVisionDisabled = errors.New("vision provider is not configured")
 type svc struct {
 	repo          repository.Repository
 	files         filestore.FileStore
-	whisper       *whisper.Client
+	whisper       transcriptionClient
 	vision        vision.Provider
 	textEmbedder  embed.Embedder
 	imageEmbedder embed.Embedder
 	mediaPreparer interface {
 		PrepareMedia(context.Context, string, string) ([][]byte, error)
 	}
-	pollDelay time.Duration
+	pollDelay          time.Duration
+	transcriptSubmitMu sync.Mutex
+	transcriptPollMu   sync.Mutex
 
 	aiBackfillInterval time.Duration
 	aiBackfillBatch    int
@@ -63,7 +66,6 @@ func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Clie
 	s := &svc{
 		repo:      repo,
 		files:     files,
-		whisper:   wc,
 		vision:    vp,
 		pollDelay: 5 * time.Second,
 	}
@@ -71,6 +73,7 @@ func New(repo repository.Repository, files filestore.FileStore, wc *whisper.Clie
 		o(s)
 	}
 	if wc != nil {
+		s.whisper = wc
 		go s.transcriptPoller()
 	}
 	if vp != nil {
@@ -240,99 +243,6 @@ func (s *svc) Update(ctx context.Context, id string, meta model.UpdateMeta) (*mo
 		return nil, err
 	}
 	return s.repo.Get(ctx, id)
-}
-
-// submitTranscription downloads the file from storage and submits it to Whisper.
-// Runs in a goroutine; errors are logged.
-func (s *svc) submitTranscription(itemID, path, contentType string) {
-	ctx := context.Background()
-
-	rc, err := s.files.Get(ctx, path)
-	if err != nil {
-		slog.Error("transcription: get file", "item", itemID, "error", err)
-		return
-	}
-	defer rc.Close()
-
-	format := formatFromContentType(contentType, path)
-	jobID, err := s.whisper.Submit(ctx, rc, format)
-	if err != nil {
-		slog.Error("transcription: submit", "item", itemID, "error", err)
-		return
-	}
-
-	if err := s.repo.SetTranscriptJob(ctx, itemID, jobID); err != nil {
-		slog.Error("transcription: set job", "item", itemID, "error", err)
-	}
-	slog.Info("transcription submitted", "item", itemID, "job", jobID)
-}
-
-// transcriptPoller runs in the background, polls pending transcription jobs
-// and periodically submits videos that were never transcribed (e.g. uploaded
-// while Whisper was down).
-func (s *svc) transcriptPoller() {
-	tick := time.Tick(s.pollDelay)
-	submitTick := time.Tick(time.Minute)
-	for {
-		select {
-		case <-tick:
-			s.pollPendingTranscripts()
-		case <-submitTick:
-			s.submitMissingTranscripts(transcriptBackfillBatch)
-		}
-	}
-}
-
-// transcriptBackfillBatch bounds how many unsubmitted videos are sent to
-// Whisper per backfill pass.
-const transcriptBackfillBatch = 2
-
-func (s *svc) submitMissingTranscripts(limit int) {
-	ctx := context.Background()
-	items, err := s.repo.PendingTranscriptSubmissions(ctx, limit)
-	if err != nil {
-		slog.Error("transcript backfill: list", "error", err)
-		return
-	}
-	if len(items) == 0 {
-		return
-	}
-	slog.Info("transcript backfill: submitting", "count", len(items))
-	for _, item := range items {
-		s.submitTranscription(item.ID, item.StoragePath, item.ContentType)
-	}
-}
-
-func (s *svc) pollPendingTranscripts() {
-	ctx := context.Background()
-	items, err := s.repo.PendingTranscripts(ctx)
-	if err != nil {
-		slog.Error("transcript poll: list", "error", err)
-		return
-	}
-	for _, item := range items {
-		if item.TranscriptJobID == nil {
-			continue
-		}
-		result, err := s.whisper.GetStatus(ctx, *item.TranscriptJobID)
-		if err != nil {
-			slog.Error("transcript poll: status", "item", item.ID, "error", err)
-			continue
-		}
-		switch result.Status {
-		case whisper.StatusDone:
-			if err := s.repo.UpdateTranscript(ctx, item.ID, result.Text); err != nil {
-				slog.Error("transcript poll: update", "item", item.ID, "error", err)
-			} else {
-				slog.Info("transcript done", "item", item.ID)
-			}
-		case whisper.StatusFailed:
-			slog.Error("transcript failed", "item", item.ID, "error", result.Error)
-			if err := s.repo.UpdateTranscript(ctx, item.ID, ""); err != nil {
-				slog.Error("transcript poll: clear job", "item", item.ID, "error", err)
-			}
-		}
-	}
 }
 
 // Describe regenerates the AI description for a single item on demand:
