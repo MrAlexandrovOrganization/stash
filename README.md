@@ -250,7 +250,8 @@ of the previous key atomically. Concurrent uploads of the same Telegram identity
 serialize only their database publication, including the first upload. The last
 successful publication wins while preserving the item ID and creation time.
 
-Migration 012 adds `file_gc` and indexes; it does not rewrite items or objects.
+Migrations 012/013 add `file_gc`, separate upload expiry and indexes; they do not
+rewrite items or objects. Upload expiry never changes when cleanup is retried.
 Startup applies it under the existing migration lock. Include the journal in
 database backups. Uploads are bounded to 30 minutes; their reservations last one
 hour. An expired reservation cannot publish a file. Failed/cancelled uploads and

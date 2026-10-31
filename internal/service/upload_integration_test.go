@@ -148,7 +148,9 @@ func assertStored(t *testing.T, repo repository.Repository, files *uploadFiles, 
 func collectAll(t *testing.T, db *pgxpool.Pool, repo repository.Repository, files *uploadFiles) {
 	t.Helper()
 	// Advance only the fixture's journal deadlines; no sleeps or production data.
-	if _, err := db.Exec(context.Background(), "UPDATE file_gc SET not_before = NOW() - INTERVAL '1 second'"); err != nil {
+	if _, err := db.Exec(context.Background(), `UPDATE file_gc
+		SET not_before = NOW() - INTERVAL '1 second',
+		upload_expires_at = LEAST(upload_expires_at, NOW() - INTERVAL '1 second')`); err != nil {
 		t.Fatal(err)
 	}
 	for range 100 {
@@ -373,7 +375,9 @@ func TestFileGCExpiredUploadCannotPublish(t *testing.T) {
 	db, repo, files := uploadFixture(t)
 	old := mustUpload(t, repo, files, "same.txt", "old")
 	files.afterPut = func() {
-		if _, err := db.Exec(context.Background(), "UPDATE file_gc SET not_before = NOW() - INTERVAL '1 second'"); err != nil {
+		if _, err := db.Exec(context.Background(), `UPDATE file_gc
+			SET not_before = NOW() - INTERVAL '1 second',
+			upload_expires_at = NOW() - INTERVAL '1 second'`); err != nil {
 			t.Error(err)
 		}
 		collectAll(t, db, repository.NewPostgres(db), files)
@@ -383,6 +387,44 @@ func TestFileGCExpiredUploadCannotPublish(t *testing.T) {
 		t.Fatalf("expired upload published: %v", err)
 	}
 	assertStored(t, repo, files, old.ID, "old")
+}
+
+func TestFileGCRetryDoesNotReviveExpiredUpload(t *testing.T) {
+	db, repo, files := uploadFixture(t)
+	old := mustUpload(t, repo, files, "same.txt", "old")
+	files.afterPut = func() {
+		if _, err := db.Exec(context.Background(), `UPDATE file_gc
+			SET not_before = NOW() - INTERVAL '1 second',
+			upload_expires_at = NOW() - INTERVAL '1 second'`); err != nil {
+			t.Error(err)
+		}
+		_, err := repo.CollectFile(context.Background(), func(ctx context.Context, path string) error {
+			files.Delete(ctx, path)
+			return errors.New("synthetic lost deletion response")
+		})
+		if err == nil {
+			t.Error("expected deletion error")
+		}
+	}
+	_, err := (&svc{repo: repo, files: files}).Upload(context.Background(), strings.NewReader("new"), uploadMeta("same.txt"))
+	if !errors.Is(err, repository.ErrUploadExpired) {
+		t.Fatalf("cleanup retry revived an expired upload: %v", err)
+	}
+	assertStored(t, repo, files, old.ID, "old")
+}
+
+func TestFileGCPreservesUnexpiredUpload(t *testing.T) {
+	db, repo, files := uploadFixture(t)
+	files.afterPut = func() {
+		if _, err := db.Exec(context.Background(), "UPDATE file_gc SET not_before = NOW() - INTERVAL '1 second'"); err != nil {
+			t.Error(err)
+		}
+		if ok, err := repo.CollectFile(context.Background(), files.Delete); ok || err != nil {
+			t.Errorf("GC collected an unexpired upload: %t %v", ok, err)
+		}
+	}
+	item := mustUpload(t, repo, files, "same.txt", "new")
+	assertStored(t, repo, files, item.ID, "new")
 }
 
 func TestFileGCConcurrentCollectorsProtectReferences(t *testing.T) {
@@ -395,7 +437,9 @@ func TestFileGCConcurrentCollectorsProtectReferences(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.Exec(ctx, "UPDATE file_gc SET not_before = NOW() - INTERVAL '1 second'"); err != nil {
+	if _, err := db.Exec(ctx, `UPDATE file_gc
+		SET not_before = NOW() - INTERVAL '1 second',
+		upload_expires_at = NOW() - INTERVAL '1 second'`); err != nil {
 		t.Fatal(err)
 	}
 	claimed := make(chan string, 2)
