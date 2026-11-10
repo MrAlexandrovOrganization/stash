@@ -34,10 +34,16 @@ type Item struct {
 }
 
 type SearchQuery struct {
-	Text   string
-	Tags   []string
-	Limit  int
-	Offset int
+	Text        string
+	Tags        []string
+	ExcludeTags []string
+	Limit       int
+	Offset      int
+}
+
+type SearchPage struct {
+	Items []*Item `json:"items"`
+	Total int     `json:"total"`
 }
 
 // SimilarRequest is the input to a hybrid similarity search. At least one of
@@ -52,6 +58,8 @@ type SimilarRequest struct {
 	ImageWeight float64 // weight for the image-space similarity term
 	Limit       int
 	Offset      int
+	Tags        []string
+	ExcludeTags []string
 }
 
 // SimilarQuery carries precomputed embedding vectors to the repository layer.
@@ -62,6 +70,8 @@ type SimilarQuery struct {
 	ImageWeight float64
 	Limit       int
 	Offset      int
+	Tags        []string
+	ExcludeTags []string
 }
 
 // EmbeddingKind selects which embedding column to read.

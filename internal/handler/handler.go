@@ -28,6 +28,7 @@ func New(svc service.Service) *Handler {
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /items", h.upload)
 	mux.HandleFunc("GET /items", h.search)
+	mux.HandleFunc("GET /items/page", h.searchPage)
 	mux.HandleFunc("GET /items/{id}", h.getItem)
 	mux.HandleFunc("GET /items/{id}/file", h.getFile)
 	mux.HandleFunc("DELETE /items/{id}", h.deleteItem)
@@ -79,8 +80,9 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 	q := model.SearchQuery{
-		Text: r.URL.Query().Get("q"),
-		Tags: parseTags(r.URL.Query().Get("tags")),
+		Text:        r.URL.Query().Get("q"),
+		Tags:        parseTags(r.URL.Query().Get("tags")),
+		ExcludeTags: parseTags(r.URL.Query().Get("exclude_tags")),
 	}
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -102,6 +104,32 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 		items = []*model.Item{}
 	}
 	writeListJSON(w, r, items)
+}
+
+func (h *Handler) searchPage(w http.ResponseWriter, r *http.Request) {
+	values := r.URL.Query()
+	q := model.SearchQuery{Text: strings.TrimSpace(values.Get("q")), Tags: parseTags(values.Get("tags")), ExcludeTags: parseTags(values.Get("exclude_tags")), Limit: 10}
+	for key, target := range map[string]*int{"limit": &q.Limit, "offset": &q.Offset} {
+		if values.Has(key) {
+			n, err := strconv.Atoi(values.Get(key))
+			if err != nil || n < 0 || (key == "limit" && (n == 0 || n > 100)) || (key == "offset" && n > 1000000) {
+				writeErr(w, http.StatusBadRequest, "invalid pagination")
+				return
+			}
+			*target = n
+		}
+	}
+	if len(q.Text) > 2000 || len(q.Tags) > 50 || len(q.ExcludeTags) > 50 {
+		writeErr(w, http.StatusBadRequest, "query too large")
+		return
+	}
+	page, err := h.svc.SearchPage(r.Context(), q)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "search page", "error", err)
+		writeErr(w, http.StatusInternalServerError, "search failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (h *Handler) getItem(w http.ResponseWriter, r *http.Request) {
@@ -191,6 +219,8 @@ func (h *Handler) similar(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		req.Text = r.URL.Query().Get("q")
+		req.Tags = parseTags(r.URL.Query().Get("tags"))
+		req.ExcludeTags = parseTags(r.URL.Query().Get("exclude_tags"))
 		req.ItemID = r.URL.Query().Get("item")
 		if v := r.URL.Query().Get("limit"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -247,6 +277,14 @@ func (h *Handler) similar(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.svc.Similar(r.Context(), req)
 	if err != nil {
+		if errors.Is(err, service.ErrIndexPending) {
+			writeErr(w, http.StatusConflict, "media index pending")
+			return
+		}
+		if errors.Is(err, service.ErrSearchUnavailable) {
+			writeErr(w, http.StatusServiceUnavailable, "search temporarily unavailable")
+			return
+		}
 		slog.Error("similar", "error", err)
 		writeErr(w, http.StatusInternalServerError, "similar search failed")
 		return

@@ -326,3 +326,32 @@ compatibility with the previous revision.
 race detector and synthetic remote results. Ordinary `make test` includes an
 in-memory gRPC test of retained Submit/replay/Ack, including an early replay
 response. No production media, transcription or inference is used in these tests.
+
+## Search and browsing
+
+`GET /items` remains a JSON array for existing consumers. `GET /items/page`
+returns `{"items": [...], "total": N}` with `limit` (1–100, default 10) and
+`offset` (0–1000000). It applies `q`, comma-separated `tags` and `exclude_tags`
+before pagination. Ordering includes the item ID to stabilize equal timestamps.
+Concurrent uploads/deletions can shift offset pages; refresh restarts browsing.
+The count and page are separate reads and can briefly differ during writes.
+
+Text search combines literal substring matching with Russian and English full-text
+matching, including word forms and changed word order, across filenames,
+descriptions, captions, transcripts and tags. Matches rank by relevance, then date.
+Tags compare without case sensitivity; every positive tag is required and any
+negative tag excludes the item. `%` and `_` in a query are literal characters.
+This API needs HTTP for the independently deployed Telegram client's existing
+contract; the existing list response is preserved during rollout.
+
+Similarity excludes files with no usable query-space vectors and nonpositive
+scores. Missing branches do not push an item ahead of scored matches. Available
+text/image scores use their weighted average, then deterministic date/ID ordering.
+Query embedding branches run independently with a 20-second budget each: one
+provider failure retains the other provider's results. No providers returns HTTP
+503; a selected file without a visual index returns HTTP 409. Image search needs
+CLIP; model/checkpoint spaces and existing vectors are unchanged.
+
+`make upload-test` also exercises real PostgreSQL/pgvector search, partial and
+missing vectors, language matching, tag filters and pages beyond 1000 items using
+synthetic data in a disposable database. No production data or models are used.

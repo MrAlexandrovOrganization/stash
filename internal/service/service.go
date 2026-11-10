@@ -28,6 +28,7 @@ type Service interface {
 	GetFile(ctx context.Context, id string) (io.ReadCloser, *model.Item, error)
 	Delete(ctx context.Context, id string) error
 	Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error)
+	SearchPage(ctx context.Context, q model.SearchQuery) (*model.SearchPage, error)
 	Update(ctx context.Context, id string, meta model.UpdateMeta) (*model.Item, error)
 	Describe(ctx context.Context, id string) (*model.Item, error)
 	// Similar runs a hybrid embedding-based search (text and/or image).
@@ -37,6 +38,12 @@ type Service interface {
 // ErrNotDescribable is returned when AI description is requested for a media
 // type the vision provider cannot handle (e.g. documents).
 var ErrNotDescribable = errors.New("media type is not describable")
+
+// ErrSearchUnavailable means that no query embedding provider succeeded.
+var ErrSearchUnavailable = errors.New("search providers unavailable")
+
+// ErrIndexPending means the selected item has no usable image embedding yet.
+var ErrIndexPending = errors.New("media index pending")
 
 // ErrVisionDisabled is returned when no vision provider is configured.
 var ErrVisionDisabled = errors.New("vision provider is not configured")
@@ -236,6 +243,22 @@ func (s *svc) Delete(ctx context.Context, id string) error {
 
 func (s *svc) Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error) {
 	return s.repo.Search(ctx, q)
+}
+
+// SearchPage preserves the legacy list API and adds an explicit bounded page.
+func (s *svc) SearchPage(ctx context.Context, q model.SearchQuery) (*model.SearchPage, error) {
+	total, err := s.repo.CountSearch(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	items, err := s.repo.Search(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []*model.Item{}
+	}
+	return &model.SearchPage{Items: items, Total: total}, nil
 }
 
 func (s *svc) Update(ctx context.Context, id string, meta model.UpdateMeta) (*model.Item, error) {
@@ -548,69 +571,85 @@ func (s *svc) backfillPendingEmbeddings() {
 	}
 }
 
-// Similar turns the request into one or more embedding vectors and ranks items
-// by the weighted cosine similarity.
+// Similar uses each available embedding branch independently. A failed optional
+// provider must not discard a successful branch. Bound query inference so a
+// missing worker does not consume the caller's entire request budget.
 func (s *svc) Similar(ctx context.Context, req model.SimilarRequest) ([]*model.Item, error) {
-	q := model.SimilarQuery{Limit: req.Limit, Offset: req.Offset}
-	if q.Limit <= 0 {
-		q.Limit = defaultSimilarLimit
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-
+	q := model.SimilarQuery{Limit: req.Limit, Offset: req.Offset, Tags: req.Tags, ExcludeTags: req.ExcludeTags, TextWeight: req.TextWeight, ImageWeight: req.ImageWeight}
+	if q.TextWeight <= 0 {
+		q.TextWeight = 1
+	}
+	if q.ImageWeight <= 0 {
+		q.ImageWeight = 1
+	}
 	if req.Text != "" {
-		if s.textEmbedder != nil {
-			tv, err := s.textEmbedder.EmbedText(ctx, req.Text)
-			if err != nil {
-				return nil, fmt.Errorf("embed text query: %w", err)
-			}
-			q.TextVector = tv
-			q.TextWeight = req.TextWeight
+		type result struct {
+			kind   model.EmbeddingKind
+			vector []float32
+			err    error
 		}
-		if s.imageEmbedder != nil {
-			iv, err := s.imageEmbedder.EmbedText(ctx, req.Text)
-			if err != nil {
-				return nil, fmt.Errorf("embed text query (image space): %w", err)
+		results := make(chan result, 2)
+		count := 0
+		for _, branch := range []struct {
+			kind     model.EmbeddingKind
+			provider embed.Embedder
+		}{{model.EmbeddingKindText, s.textEmbedder}, {model.EmbeddingKindImage, s.imageEmbedder}} {
+			if branch.provider == nil {
+				continue
 			}
-			q.ImageVector = iv
-			q.ImageWeight = req.ImageWeight
+			count++
+			go func() {
+				branchCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				defer cancel()
+				vec, err := branch.provider.EmbedText(branchCtx, req.Text)
+				results <- result{branch.kind, vec, err}
+			}()
+		}
+		for range count {
+			select {
+			case r := <-results:
+				if r.err != nil {
+					slog.WarnContext(ctx, "search embedding branch unavailable", "kind", r.kind, "error", r.err)
+					continue
+				}
+				if r.kind == model.EmbeddingKindText {
+					q.TextVector = r.vector
+				} else {
+					q.ImageVector = r.vector
+				}
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 	}
-
 	if req.ItemID != "" {
-		if s.imageEmbedder == nil {
-			return nil, fmt.Errorf("image embeddings are disabled")
-		}
 		iv, err := s.repo.GetEmbedding(ctx, req.ItemID, model.EmbeddingKindImage)
 		if err != nil {
 			return nil, fmt.Errorf("get item embedding: %w", err)
 		}
-		q.ImageVector = iv
-		if q.ImageWeight == 0 {
-			q.ImageWeight = 1
+		if len(iv) == 0 {
+			return nil, ErrIndexPending
 		}
+		q.ImageVector = iv
 	}
-
 	if len(req.ImageBytes) > 0 {
 		if s.imageEmbedder == nil {
-			return nil, fmt.Errorf("image embeddings are disabled")
+			return nil, ErrSearchUnavailable
 		}
-		iv, err := s.imageEmbedder.EmbedImage(ctx, req.ImageBytes)
+		queryCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		iv, err := s.imageEmbedder.EmbedImage(queryCtx, req.ImageBytes)
 		if err != nil {
-			return nil, fmt.Errorf("embed image query: %w", err)
+			return nil, fmt.Errorf("%w: image provider", ErrSearchUnavailable)
 		}
 		q.ImageVector = iv
-		if q.ImageWeight == 0 {
-			q.ImageWeight = 1
-		}
 	}
-
-	if q.TextWeight == 0 && q.ImageWeight == 0 {
-		q.TextWeight, q.ImageWeight = 1, 1
-	} else if q.TextWeight == 0 {
-		q.TextWeight = 1
-	} else if q.ImageWeight == 0 {
-		q.ImageWeight = 1
+	if len(q.TextVector) == 0 && len(q.ImageVector) == 0 {
+		return nil, ErrSearchUnavailable
 	}
-
 	return s.repo.Similar(ctx, q)
 }
 

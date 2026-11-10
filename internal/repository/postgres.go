@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"strings"
 	"time"
@@ -33,55 +34,29 @@ func (r *postgres) Get(ctx context.Context, id string) (*model.Item, error) {
 // serializes the entire table. Callers may override via q.Limit.
 const defaultSearchLimit = 1000
 
-func (r *postgres) Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error) {
-	var conds []string
-	var args []any
-	i := 1
+//go:embed sql/search_base.sql
+var searchBaseSQL string
 
+//go:embed sql/similar.sql
+var similarSQL string
+
+func (r *postgres) CountSearch(ctx context.Context, q model.SearchQuery) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx, searchBaseSQL+" SELECT count(*) FROM matched", q.Text, q.Tags, q.ExcludeTags).Scan(&count)
+	return count, err
+}
+
+func (r *postgres) Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error) {
 	limit := q.Limit
-	if limit <= 0 {
+	if limit <= 0 || limit > defaultSearchLimit {
 		limit = defaultSearchLimit
 	}
-
-	if q.Text != "" {
-		// Full-text-ish search across every textual field: description,
-		// transcript, original caption, AI description and tags.
-		conds = append(conds, fmt.Sprintf(
-			"(description ILIKE $%d OR transcript ILIKE $%d OR original_caption ILIKE $%d OR ai_description ILIKE $%d OR EXISTS (SELECT 1 FROM unnest(tags) AS t WHERE t ILIKE $%d))",
-			i, i, i, i, i,
-		))
-		args = append(args, "%"+q.Text+"%")
-		i++
-	}
-	if len(q.Tags) > 0 {
-		conds = append(conds, fmt.Sprintf("tags @> $%d", i))
-		args = append(args, q.Tags)
-		i++
-	}
-
-	where := ""
-	if len(conds) > 0 {
-		where = "WHERE " + strings.Join(conds, " AND ")
-	}
-
-	query := fmt.Sprintf(`
-		SELECT %s
-		FROM items %s ORDER BY created_at DESC`, itemColumns, where)
-
-	if q.Limit > 0 {
-		query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", i, i+1)
-		args = append(args, q.Limit, q.Offset)
-	} else {
-		query += fmt.Sprintf(" LIMIT $%d", i)
-		args = append(args, limit)
-	}
-
-	rows, err := r.db.Query(ctx, query, args...)
+	query := searchBaseSQL + fmt.Sprintf(" SELECT %s FROM matched ORDER BY relevance DESC, created_at DESC, id DESC LIMIT $4 OFFSET $5", itemColumns)
+	rows, err := r.db.Query(ctx, query, q.Text, q.Tags, q.ExcludeTags, limit, max(0, q.Offset))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
 	var items []*model.Item
 	for rows.Next() {
 		item, err := scanItem(rows)
@@ -236,9 +211,12 @@ func (r *postgres) GetEmbedding(ctx context.Context, id string, kind model.Embed
 	if kind == model.EmbeddingKindImage {
 		col = "embedding_image"
 	}
-	var v pgvector.Vector
+	var v *pgvector.Vector
 	if err := r.db.QueryRow(ctx, fmt.Sprintf("SELECT %s FROM items WHERE id = $1", col), id).Scan(&v); err != nil {
 		return nil, err
+	}
+	if v == nil {
+		return nil, nil
 	}
 	return v.Slice(), nil
 }
@@ -270,40 +248,24 @@ func (r *postgres) PendingEmbeddings(ctx context.Context, limit int) ([]*model.I
 // vectors, using pgvector's <=> (cosine distance) operator.
 func (r *postgres) Similar(ctx context.Context, q model.SimilarQuery) ([]*model.Item, error) {
 	limit := q.Limit
-	if limit <= 0 {
+	if limit <= 0 || limit > defaultSearchLimit {
 		limit = defaultSearchLimit
 	}
-
-	var terms []string
-	var args []any
-	i := 1
-	if len(q.TextVector) > 0 {
-		terms = append(terms, fmt.Sprintf("($%d * (1 - (embedding_text <=> $%d)))", i, i+1))
-		args = append(args, q.TextWeight, pgvector.NewVector(q.TextVector))
-		i += 2
+	var textVector, imageVector any
+	if len(q.TextVector) > 0 && q.TextWeight > 0 {
+		textVector = pgvector.NewVector(q.TextVector)
 	}
-	if len(q.ImageVector) > 0 {
-		terms = append(terms, fmt.Sprintf("($%d * (1 - (embedding_image <=> $%d)))", i, i+1))
-		args = append(args, q.ImageWeight, pgvector.NewVector(q.ImageVector))
-		i += 2
+	if len(q.ImageVector) > 0 && q.ImageWeight > 0 {
+		imageVector = pgvector.NewVector(q.ImageVector)
 	}
-	if len(terms) == 0 {
+	if textVector == nil && imageVector == nil {
 		return nil, fmt.Errorf("similar: no embedding vector provided")
 	}
-
-	args = append(args, limit, q.Offset)
-	query := fmt.Sprintf(`
-		SELECT %s
-		FROM items
-		ORDER BY %s DESC
-		LIMIT $%d OFFSET $%d`, itemColumns, strings.Join(terms, " + "), i, i+1)
-
-	rows, err := r.db.Query(ctx, query, args...)
+	rows, err := r.db.Query(ctx, fmt.Sprintf(similarSQL, itemColumns), textVector, imageVector, q.TextWeight, q.ImageWeight, limit, max(0, q.Offset), q.Tags, q.ExcludeTags)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
 	var items []*model.Item
 	for rows.Next() {
 		item, err := scanItem(rows)

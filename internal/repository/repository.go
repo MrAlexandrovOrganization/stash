@@ -20,6 +20,7 @@ type Repository interface {
 	Get(ctx context.Context, id string) (*model.Item, error)
 	Delete(ctx context.Context, id string) error
 	Search(ctx context.Context, q model.SearchQuery) ([]*model.Item, error)
+	CountSearch(ctx context.Context, q model.SearchQuery) (int, error)
 	Update(ctx context.Context, id string, meta model.UpdateMeta) error
 	EnsureTranscription(ctx context.Context, id, path, format string) error
 	TranscriptionTasks(ctx context.Context, state string, submit bool, limit int) ([]*model.TranscriptionTask, error)
