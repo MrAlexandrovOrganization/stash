@@ -12,7 +12,7 @@ func TestSearchPagingLanguageAndTags(t *testing.T) {
 	db, repo, _ := uploadFixture(t)
 	_, err := db.Exec(t.Context(), `INSERT INTO items(id,type,file_name,content_type,size,storage_path,description,tags,created_at)
  SELECT 'fixture-'||n,'image','photo-'||n||'.jpg','image/jpeg',1,'fixture/'||n,
- CASE WHEN n=1 THEN 'Рыжие коты спят на диване' ELSE 'ordinary unrelated media' END,
+ CASE WHEN n=1 THEN 'Рыжие коты спят на диване' ELSE 'ordinary unrelated media, который' END,
  CASE WHEN n=1 THEN ARRAY['Коты','Дом'] ELSE ARRAY['skip'] END,
  '2026-01-01'::timestamptz + n * interval '1 second' FROM generate_series(1,1128) n`)
 	if err != nil {
@@ -24,7 +24,7 @@ func TestSearchPagingLanguageAndTags(t *testing.T) {
 		t.Fatalf("last page: %#v %v", page, err)
 	}
 	for _, q := range []model.SearchQuery{
-		{Text: "диване котами"}, {Text: "photo-1.jpg"}, {Text: "кот", Tags: []string{"коты"}}, {ExcludeTags: []string{"SKIP"}},
+		{Text: "диване котами"}, {Text: "photo-1.jpg"}, {Text: "кот"}, {Text: "кот", Tags: []string{"коты"}}, {ExcludeTags: []string{"SKIP"}},
 	} {
 		got, err := repo.Search(t.Context(), q)
 		if err != nil || len(got) != 1 || got[0].ID != "fixture-1" {

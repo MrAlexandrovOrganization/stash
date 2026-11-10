@@ -336,7 +336,7 @@ before pagination. Ordering includes the item ID to stabilize equal timestamps.
 Concurrent uploads/deletions can shift offset pages; refresh restarts browsing.
 The count and page are separate reads and can briefly differ during writes.
 
-Text search combines literal substring matching with Russian and English full-text
+Text search combines literal phrase matching at word boundaries with Russian and English full-text
 matching, including word forms and changed word order, across filenames,
 descriptions, captions, transcripts and tags. Matches rank by relevance, then date.
 Tags compare without case sensitivity; every positive tag is required and any

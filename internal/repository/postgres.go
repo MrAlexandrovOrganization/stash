@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ var similarSQL string
 
 func (r *postgres) CountSearch(ctx context.Context, q model.SearchQuery) (int, error) {
 	var count int
-	err := r.db.QueryRow(ctx, searchBaseSQL+" SELECT count(*) FROM matched", q.Text, q.Tags, q.ExcludeTags).Scan(&count)
+	err := r.db.QueryRow(ctx, searchBaseSQL+" SELECT count(*) FROM matched", q.Text, q.Tags, q.ExcludeTags, literalSearchPattern(q.Text)).Scan(&count)
 	return count, err
 }
 
@@ -51,8 +52,8 @@ func (r *postgres) Search(ctx context.Context, q model.SearchQuery) ([]*model.It
 	if limit <= 0 || limit > defaultSearchLimit {
 		limit = defaultSearchLimit
 	}
-	query := searchBaseSQL + fmt.Sprintf(" SELECT %s FROM matched ORDER BY relevance DESC, created_at DESC, id DESC LIMIT $4 OFFSET $5", itemColumns)
-	rows, err := r.db.Query(ctx, query, q.Text, q.Tags, q.ExcludeTags, limit, max(0, q.Offset))
+	query := searchBaseSQL + fmt.Sprintf(" SELECT %s FROM matched ORDER BY relevance DESC, created_at DESC, id DESC LIMIT $5 OFFSET $6", itemColumns)
+	rows, err := r.db.Query(ctx, query, q.Text, q.Tags, q.ExcludeTags, literalSearchPattern(q.Text), limit, max(0, q.Offset))
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +67,12 @@ func (r *postgres) Search(ctx context.Context, q model.SearchQuery) ([]*model.It
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// Bound literal phrases so "кот" does not match the unrelated word "который".
+// Keep regex syntax from user input literal; the expression is still a SQL parameter.
+func literalSearchPattern(text string) string {
+	return `\m` + regexp.QuoteMeta(text) + `\M`
 }
 
 func (r *postgres) Update(ctx context.Context, id string, meta model.UpdateMeta) error {

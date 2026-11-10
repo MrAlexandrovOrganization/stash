@@ -14,10 +14,10 @@ WITH source AS (
     SELECT ranked.*,
         CASE WHEN $1 = '' THEN 0 ELSE
             ts_rank_cd(ru, ru_query) + ts_rank_cd(en, en_query) +
-            CASE WHEN strpos(lower(body), lower($1)) > 0 THEN 1 ELSE 0 END
+            CASE WHEN body ~* $4 THEN 1 ELSE 0 END
         END AS relevance
     FROM ranked
-    WHERE ($1 = '' OR strpos(lower(body), lower($1)) > 0
+    WHERE ($1 = '' OR body ~* $4
            OR ru @@ ru_query OR en @@ en_query)
       AND NOT EXISTS (
           SELECT 1 FROM unnest($2::text[]) AS wanted
