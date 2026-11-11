@@ -10,3 +10,5 @@ gen/*
 __pycache__/
 
 .server-release*
+
+.observability/

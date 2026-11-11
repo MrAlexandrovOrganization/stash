@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "service": "stash",
+  "components": [
+    "stash/*",
+    "stash-workers/*",
+    "ollama/*"
+  ],
+  "logs": [
+    {
+      "file": "monitoring/alloy/logs.alloy",
+      "phase": "parse",
+      "order": 70
+    },
+    {
+      "file": "monitoring/alloy/normalized-logs.alloy",
+      "phase": "normalize",
+      "order": 180
+    }
+  ],
+  "assets": [
+    {
+      "kind": "metrics",
+      "file": "monitoring/prometheus/stash.yml",
+      "destination": "stash.yml",
+      "location": "local"
+    },
+    {
+      "kind": "dashboards",
+      "file": "monitoring/grafana/compute-workers.json",
+      "destination": "Compute/compute-workers.json",
+      "location": "central"
+    }
+  ]
+}

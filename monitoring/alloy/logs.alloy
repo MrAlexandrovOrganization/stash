@@ -1,0 +1,26 @@
+stage.match {
+	selector = `{service=~"(ollama|stash-workers)/ollama"}`
+
+	stage.regex {
+		expression = `^\[GIN\] [0-9]{4}/[0-9]{2}/[0-9]{2} - [0-9]{2}:[0-9]{2}:[0-9]{2} \|\s*(?P<http_status>[1-5][0-9]{2})\s*\|[^|]+\|\s*(?P<http_client>[^ |]+)\s*\|\s*(?P<http_method>[A-Z]+)\s+"(?P<http_path>[^"]*)"\s*$`
+	}
+	// GIN has no severity: classify status, with successful local probes at debug.
+	stage.template {
+		source   = "text_level"
+		template = `{{ if .http_status }}{{ if ge .http_status "500" }}error{{ else if ge .http_status "400" }}warn{{ else if and (ge .http_status "200") (lt .http_status "300") (or (eq .http_client "127.0.0.1") (eq .http_client "::1")) (or (and (eq .http_method "HEAD") (eq .http_path "/")) (and (eq .http_method "GET") (eq .http_path "/api/tags"))) }}debug{{ else }}info{{ end }}{{ else }}unknown{{ end }}`
+	}
+}
+
+stage.match {
+	selector = `{service="stash/stash-tailnet"}`
+	// Tailscale has no native severity. Only these routine events have a policy;
+	// an unfamiliar event stays unknown so a new failure cannot become info.
+	stage.regex {
+		expression = `^[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} (?P<tailnet_routine>(netcheck: (netcheck: )?UDP is blocked, trying (ICMP|HTTPS)|magicsock: new contact: .+|control: (NetInfo: .+|controlclient direct: (updating discoKey for .+ via mapSession|got TSMP disco key advertisement from .+ via eventbus))))$`
+	}
+
+	stage.template {
+		source   = "text_level"
+		template = `{{ if .tailnet_routine }}debug{{ else }}{{ .Value }}{{ end }}`
+	}
+}

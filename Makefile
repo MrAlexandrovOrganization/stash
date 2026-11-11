@@ -193,3 +193,5 @@ role-check:
 ARGS ?= ps
 compose:
 	$(DOCKER_COMPOSE) $(ARGS)
+
+include makefiles/observability.mk

@@ -1,0 +1,14 @@
+stage.match {
+	selector = `{service="stash/stash"} |~ "^\\s*\\{"`
+
+	stage.json {
+		expressions = {
+			stash_message = "body || msg",
+		}
+	}
+
+	stage.template {
+		source   = "normalized_level"
+		template = `{{ if and (eq .Value "info") (eq .stash_message "embedding backfill: processing") }}debug{{ else }}{{ .Value }}{{ end }}`
+	}
+}

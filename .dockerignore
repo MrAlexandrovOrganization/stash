@@ -9,3 +9,5 @@ stash-worker
 .worker-release*
 
 .server-release*
+
+.observability/
