@@ -374,3 +374,10 @@ CI публикует его как artifact. Экспорт содержит я
 пакетов задаются закрытой конфигурацией доставки. Сборщик строит итоговый файл
 из закреплённых экспортов; обычная сборка этого проекта не зависит от них.
 Копия Python-инструмента закреплена SHA-256 в `monitoring/tool.lock.json`.
+
+### Native model log levels
+
+The service-owned log policy classifies recognized llama-server loading and
+inference progress as debug. Explicit allocation failures and failed HTTP
+requests remain errors; compatibility warnings remain warnings. Unrecognized
+native output remains visible as unknown for further investigation.
