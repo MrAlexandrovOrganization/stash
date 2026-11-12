@@ -21,6 +21,9 @@ def panel(
         }
         for i, (expr, legend) in enumerate(queries)
     ]
+    for target in targets:
+        if "$__rate_interval" in target["expr"]:
+            target["interval"] = "60s"
     return {
         "title": title,
         "type": kind,
@@ -172,7 +175,7 @@ def main():
         rules=[]
         for item in document['panels']:
             for target in item['targets']:
-                expr=target['expr'].replace('$__rate_interval','1m').replace('$__range','6h').replace('$service','stash|clip-embedder').replace('$worker','.*')
+                expr=target['expr'].replace('$__rate_interval','4m').replace('$__range','6h').replace('$service','stash|clip-embedder').replace('$worker','.*')
                 rules.append({'record':'compute_dashboard_expression_'+str(len(rules)),'expr':expr})
         print(json.dumps({'groups':[{'name':'dashboard-syntax','rules':rules}]}));return
     target=ROOT/'grafana/compute-workers.json'

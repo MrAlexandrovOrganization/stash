@@ -381,3 +381,7 @@ The service-owned log policy classifies recognized llama-server loading and
 inference progress as debug. Explicit allocation failures and failed HTTP
 requests remain errors; compatibility warnings remain warnings. Unrecognized
 native output remains visible as unknown for further investigation.
+
+Dashboard-only updates use `[resources-only]` in the main commit message. CI
+checks the package, while worker publication and application rollout are skipped.
+The pinned observability package is delivered through the collector CI/CD.
